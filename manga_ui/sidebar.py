@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
     QFontComboBox, QSpinBox,
 )
 
+from .region_item import MIN_FONT_SIZE
+
 
 class RegionEditorPanel(QWidget):
     """Shows/edits the currently selected text region: original text (read-only),
@@ -30,7 +32,7 @@ class RegionEditorPanel(QWidget):
         self.font_combo.currentFontChanged.connect(self._on_font_changed)
 
         self.size_spin = QSpinBox()
-        self.size_spin.setRange(6, 96)
+        self.size_spin.setRange(MIN_FONT_SIZE, 96)
         self.size_spin.valueChanged.connect(self._on_size_changed)
 
         font_row = QHBoxLayout()
@@ -92,3 +94,12 @@ class RegionEditorPanel(QWidget):
             return
         self._current_item.set_font_size(size)
         self.region_updated.emit()
+
+    def sync_font_size(self, item):
+        """Reflect an auto-fitted size in the spinbox without treating it
+        as a manual user choice."""
+        if item is not self._current_item:
+            return
+        self._updating = True
+        self.size_spin.setValue(item.font_size)
+        self._updating = False

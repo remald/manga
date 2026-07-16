@@ -55,6 +55,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.splitter)
 
         self.scene.selectionChanged.connect(self._on_selection_changed)
+        self.scene.region_autofit.connect(self.editor_panel.sync_font_size)
         self.view.region_created.connect(self._on_region_created)
         self.editor_panel.region_updated.connect(self._refresh_region_list)
 
@@ -193,7 +194,7 @@ class MainWindow(QMainWindow):
             source_text=data["source_text"],
             enabled=data["enabled"],
             font_family=data.get("font_family", "Arial"),
-            font_size=data.get("font_size", 14),
+            font_size=None if data.get("auto_fit", True) else data.get("font_size", 14),
         )
         item.setPos(data["x"], data["y"])
 

@@ -2,11 +2,12 @@ from PySide6.QtCore import Signal, QRectF
 from PySide6.QtGui import QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsPixmapItem
 
-from .region_item import TextRegionItem, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE
+from .region_item import TextRegionItem, DEFAULT_FONT_FAMILY
 
 
 class PageScene(QGraphicsScene):
     region_double_clicked = Signal(object)
+    region_autofit = Signal(object)  # region whose font size was auto-fitted
 
     def __init__(self):
         super().__init__()
@@ -27,11 +28,13 @@ class PageScene(QGraphicsScene):
         source_text="",
         enabled=True,
         font_family=DEFAULT_FONT_FAMILY,
-        font_size=DEFAULT_FONT_SIZE,
+        font_size=None,
     ):
         item = TextRegionItem(rect, translated_text, source_text, enabled, font_family, font_size)
         self.addItem(item)
         self.regions.append(item)
+        if item.auto_fit:
+            item.fit_font_size()  # first fit ran before the item had a scene
         return item
 
     def remove_region(self, item):
