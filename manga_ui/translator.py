@@ -22,18 +22,54 @@ class MangaTranslator:
         text = text.strip()
         if not text:
             return ""
+        return self._complete(
+            f"Translate the following segment into {self.target_language}, "
+            f"without additional explanation.\n\n{text}",
+            max_tokens=512,
+        )
+
+    def translate_batch(self, texts: list) -> list | None:
+        """Translates all fragments of a page in one call as a numbered list,
+        so the model sees cross-bubble context. Returns None if the model
+        broke the list structure (caller should fall back to translate())."""
+        texts = [" ".join(t.split()) for t in texts]  # keep each item on one line
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts) if t)
+        if not numbered:
+            return ["" for _ in texts]
+        out = self._complete(
+            f"Translate the following segment into {self.target_language}, "
+            f"without additional explanation.\n\n{numbered}",
+            max_tokens=min(2048, 128 + 96 * len(texts)),
+        )
+        import re
+        parsed = {}
+        for line in out.splitlines():
+            m = re.match(r"\s*(\d+)[.)]\s*(.*)", line)
+            if m:
+                parsed[int(m.group(1))] = m.group(2).strip()
+        result = []
+        n = 0
+        for t in texts:
+            if not t:
+                result.append("")
+                continue
+            n += 1
+            if n not in parsed:
+                return None
+            result.append(parsed[n])
+        if len(parsed) != n:
+            return None
+        return result
+
+    def _complete(self, prompt: str, max_tokens: int) -> str:
         self._ensure_loaded()
         # official HY-MT prompt format; sampling params from the model card
-        prompt = (
-            f"Translate the following segment into {self.target_language}, "
-            f"without additional explanation.\n\n{text}"
-        )
         response = self._llm.create_chat_completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             top_p=0.6,
             top_k=20,
             repeat_penalty=1.05,
-            max_tokens=512,
+            max_tokens=max_tokens,
         )
         return response["choices"][0]["message"]["content"].strip()

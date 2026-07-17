@@ -5,6 +5,16 @@ from PIL import Image
 from PySide6.QtCore import QThread, Signal
 
 
+def sort_reading_order(texts: list, page_height: int) -> list:
+    """Manga reading order: top-to-bottom in horizontal bands, right-to-left
+    within a band. Approximate, but good enough for translation context."""
+    band = max(1.0, page_height * 0.12)
+    return sorted(
+        texts,
+        key=lambda t: (int((t["y"] + t["h"] / 2) // band), -(t["x"] + t["w"] / 2)),
+    )
+
+
 class DetectionWorker(QThread):
     """Runs the page pipeline in a background thread: detection first (boxes
     show up immediately), then OCR + translation region by region."""
@@ -43,16 +53,12 @@ class DetectionWorker(QThread):
                 self._run_retranslation(task[1], task[2])
 
     def _run_retranslation(self, index: int, fragments):
-        for i, (region_id, source) in enumerate(fragments):
-            try:
-                self.status_changed.emit(
-                    f"Повторный перевод: страница {index + 1}, фрагмент {i + 1}/{len(fragments)}..."
-                )
-                translation = self._translator.translate(source)
-            except Exception as e:
-                self.status_changed.emit(f"Ошибка перевода (стр. {index + 1}, фрагмент {i + 1}): {e}")
-                continue
-            self.region_translated.emit(index, region_id, source, translation)
+        self.status_changed.emit(f"Повторный перевод страницы {index + 1}...")
+        sources = [source for _, source in fragments]
+        translations = self._translate_fragments(index, sources)
+        for (region_id, source), translation in zip(fragments, translations):
+            if source and translation:
+                self.region_translated.emit(index, region_id, source, translation)
         self.status_changed.emit("")
 
     def _run_detection(self, index: int, path: str):
@@ -69,28 +75,56 @@ class DetectionWorker(QThread):
             self.status_changed.emit(f"Ошибка детекции на странице {index + 1}: {e}")
             return
 
+        image = Image.open(path).convert("RGB")
+        result["texts"] = sort_reading_order(result["texts"], image.height)
         for det in result["texts"]:
             det["id"] = uuid4().hex
         self.page_detected.emit(index, result)
 
         texts = result["texts"]
-        if texts:
-            image = Image.open(path).convert("RGB")
-            for i, det in enumerate(texts):
-                try:
-                    self.status_changed.emit(
-                        f"OCR + перевод: страница {index + 1}, фрагмент {i + 1}/{len(texts)}..."
-                    )
-                    crop = image.crop((
-                        int(det["x"]), int(det["y"]),
-                        int(det["x"] + det["w"]), int(det["y"] + det["h"]),
-                    ))
-                    source = self._ocr.read(crop)
-                    translation = self._translator.translate(source)
-                except Exception as e:
-                    self.status_changed.emit(
-                        f"Ошибка OCR/перевода (стр. {index + 1}, фрагмент {i + 1}): {e}"
-                    )
-                    continue
+        if not texts:
+            self.status_changed.emit("")
+            return
+
+        sources = [""] * len(texts)
+        for i, det in enumerate(texts):
+            try:
+                self.status_changed.emit(
+                    f"OCR: страница {index + 1}, фрагмент {i + 1}/{len(texts)}..."
+                )
+                crop = image.crop((
+                    int(det["x"]), int(det["y"]),
+                    int(det["x"] + det["w"]), int(det["y"] + det["h"]),
+                ))
+                sources[i] = self._ocr.read(crop)
+            except Exception as e:
+                self.status_changed.emit(f"Ошибка OCR (стр. {index + 1}, фрагмент {i + 1}): {e}")
+
+        self.status_changed.emit(f"Перевод страницы {index + 1}...")
+        translations = self._translate_fragments(index, sources)
+        for det, source, translation in zip(texts, sources, translations):
+            if source:
                 self.region_translated.emit(index, det["id"], source, translation)
         self.status_changed.emit("")
+
+    def _translate_fragments(self, index: int, sources: list) -> list:
+        """One numbered-list call for the whole page (cross-bubble context);
+        falls back to per-fragment calls if the model breaks the list."""
+        if hasattr(self._translator, "translate_batch"):
+            try:
+                result = self._translator.translate_batch(sources)
+                if result is not None:
+                    return result
+                self.status_changed.emit(
+                    f"Страница {index + 1}: батч-перевод не разобран, перевожу по фрагментам..."
+                )
+            except Exception as e:
+                self.status_changed.emit(f"Ошибка батч-перевода (стр. {index + 1}): {e}")
+        translations = []
+        for source in sources:
+            try:
+                translations.append(self._translator.translate(source) if source else "")
+            except Exception as e:
+                self.status_changed.emit(f"Ошибка перевода (стр. {index + 1}): {e}")
+                translations.append("")
+        return translations
