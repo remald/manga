@@ -5,6 +5,7 @@ from PySide6.QtGui import QPixmap, QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QFileDialog, QToolBar, QSplitter, QListWidget,
     QListWidgetItem, QWidget, QVBoxLayout, QLabel, QMessageBox, QSizePolicy,
+    QComboBox,
 )
 
 from .detection_worker import DetectionWorker
@@ -19,6 +20,20 @@ from .sidebar import RegionEditorPanel
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 PLACEHOLDER_TEXT = "Translation not ready"
+
+# display label -> full English name for the HY-MT prompt
+TARGET_LANGUAGES = {
+    "Русский": "Russian",
+    "Английский": "English",
+    "Китайский": "Chinese",
+    "Корейский": "Korean",
+    "Испанский": "Spanish",
+    "Французский": "French",
+    "Немецкий": "German",
+    "Португальский": "Portuguese",
+    "Итальянский": "Italian",
+    "Турецкий": "Turkish",
+}
 
 
 class MainWindow(QMainWindow):
@@ -69,7 +84,8 @@ class MainWindow(QMainWindow):
 
         self.inpainter = LamaInpainter()
         self._export_worker = None
-        self.detection_worker = DetectionWorker(MangaDetector(), MangaOcrReader(), MangaTranslator())
+        self.translator = MangaTranslator()
+        self.detection_worker = DetectionWorker(MangaDetector(), MangaOcrReader(), self.translator)
         self.detection_worker.page_detected.connect(self._on_page_detected)
         self.detection_worker.region_translated.connect(self._on_region_translated)
         self.detection_worker.status_changed.connect(self._on_detection_status)
@@ -112,6 +128,17 @@ class MainWindow(QMainWindow):
         self.export_action = QAction("Экспорт страницы...", self)
         self.export_action.triggered.connect(self.export_current_page)
         tb.addAction(self.export_action)
+        tb.addSeparator()
+
+        tb.addWidget(QLabel(" Язык: "))
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(TARGET_LANGUAGES.keys())
+        self.language_combo.currentTextChanged.connect(self._on_language_changed)
+        tb.addWidget(self.language_combo)
+
+        retranslate_action = QAction("Перевести заново", self)
+        retranslate_action.triggered.connect(self.retranslate_current_page)
+        tb.addAction(retranslate_action)
 
     # --- folder / page navigation ----------------------------------------
     def open_folder(self):
@@ -208,6 +235,28 @@ class MainWindow(QMainWindow):
                 data["source_text"] = source
                 data["translated_text"] = translation
                 return
+
+    def retranslate_current_page(self):
+        """Re-runs translation for the current page from the stored OCR
+        sources (no detection/OCR pass), e.g. after a language switch."""
+        if self.current_page < 0:
+            return
+        fragments = [
+            (r.region_id, r.source_text)
+            for r in self.scene.regions
+            if r.region_id and r.source_text.strip()
+        ]
+        if not fragments:
+            self.statusBar().showMessage(
+                "Нечего переводить: на странице нет фрагментов с распознанным текстом", 5000
+            )
+            return
+        self.detection_worker.enqueue_retranslation(self.current_page, fragments)
+
+    def _on_language_changed(self, label: str):
+        # a plain str assignment is atomic, safe to do while the worker runs;
+        # applies to fragments translated from now on
+        self.translator.target_language = TARGET_LANGUAGES[label]
 
     def _on_detection_status(self, message: str):
         if message:
