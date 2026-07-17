@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PySide6.QtCore import QThread, Signal
 
 from .exporter import export_page
@@ -26,3 +28,35 @@ class ExportWorker(QThread):
             self.failed.emit(str(e))
             return
         self.finished_ok.emit(self._out_path)
+
+
+class BatchExportWorker(QThread):
+    """Exports every page of the folder into out_dir, reporting progress."""
+
+    progress = Signal(int, int)  # pages done, total
+    finished_ok = Signal(str)    # output directory
+    failed = Signal(str)
+
+    def __init__(self, jobs, inpainter, out_dir):
+        """jobs: list of (image_path, regions, bubbles) in page order."""
+        super().__init__()
+        self._jobs = jobs
+        self._inpainter = inpainter
+        self._out_dir = Path(out_dir)
+
+    def run(self):
+        errors = []
+        for i, (image_path, regions, bubbles) in enumerate(self._jobs):
+            src = Path(image_path)
+            try:
+                qimage = export_page(str(src), regions, bubbles, self._inpainter)
+                out = self._out_dir / f"{src.stem}_translated.png"
+                if not qimage.save(str(out)):
+                    raise RuntimeError(f"не удалось сохранить {out}")
+            except Exception as e:
+                errors.append(f"{src.name}: {e}")
+            self.progress.emit(i + 1, len(self._jobs))
+        if errors:
+            self.failed.emit("Не экспортированы страницы:\n" + "\n".join(errors))
+        else:
+            self.finished_ok.emit(str(self._out_dir))

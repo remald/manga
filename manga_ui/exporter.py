@@ -1,7 +1,10 @@
 import numpy as np
 from PIL import Image
-from PySide6.QtGui import QImage, QPainter, QFont, QColor, QTextOption
-from PySide6.QtGui import QTextDocument
+from PySide6.QtGui import QImage, QPainter, QFont, QTextDocument
+
+from .region_item import (
+    DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE,
+)
 
 FILL_PAD = 3      # px around a text box when painting it over with bubble tone
 INPAINT_PAD = 5   # px around a text box in the LaMa mask
@@ -79,15 +82,44 @@ def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter)
     # 3) draw translations exactly as laid out in the editor
     qimage = QImage(arr.tobytes(), w, h, 3 * w, QImage.Format_RGB888).copy()
     painter = QPainter(qimage)
-    painter.setRenderHint(QPainter.TextAntialiasing)
-    for r in active:
-        doc = QTextDocument()
-        doc.setDefaultFont(QFont(r["font_family"], r["font_size"]))
-        doc.setPlainText(r["translated_text"])
-        doc.setTextWidth(r["w"])
-        painter.save()
-        painter.translate(r["x"], r["y"])
-        doc.drawContents(painter)
-        painter.restore()
-    painter.end()
+    try:
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        for r in active:
+            family = r.get("font_family", DEFAULT_FONT_FAMILY)
+            size = r.get("font_size")
+            if size is None:
+                # region never materialized in the editor (page not visited):
+                # auto-fit here the same way the editor would
+                size = (
+                    _fit_font_size(r["translated_text"], family, r["w"], r["h"])
+                    if r.get("auto_fit", True) else DEFAULT_FONT_SIZE
+                )
+            doc = QTextDocument()
+            doc.setDefaultFont(QFont(family, size))
+            doc.setPlainText(r["translated_text"])
+            doc.setTextWidth(r["w"])
+            painter.save()
+            painter.translate(r["x"], r["y"])
+            doc.drawContents(painter)
+            painter.restore()
+    finally:
+        painter.end()
     return qimage
+
+
+def _fit_font_size(text: str, family: str, width: float, height: float) -> int:
+    """Mirror of TextRegionItem.fit_font_size for regions that were never
+    shown in the editor."""
+    doc = QTextDocument()
+    doc.setPlainText(text)
+    doc.setTextWidth(width)
+    lo, hi, best = MIN_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        doc.setDefaultFont(QFont(family, mid))
+        if doc.size().height() <= height:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best

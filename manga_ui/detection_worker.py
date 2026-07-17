@@ -11,6 +11,7 @@ class DetectionWorker(QThread):
 
     page_detected = Signal(int, dict)  # page index, detector result
     region_translated = Signal(int, str, str, str)  # page index, region id, source, translation
+    page_done = Signal(int)  # page index whose full pipeline finished (even with errors)
     status_changed = Signal(str)
 
     def __init__(self, detector, ocr_reader, translator):
@@ -55,6 +56,12 @@ class DetectionWorker(QThread):
         self.status_changed.emit("")
 
     def _run_detection(self, index: int, path: str):
+        try:
+            self._run_detection_inner(index, path)
+        finally:
+            self.page_done.emit(index)
+
+    def _run_detection_inner(self, index: int, path: str):
         try:
             self.status_changed.emit(f"Детекция: страница {index + 1}...")
             result = self._detector.detect(path)

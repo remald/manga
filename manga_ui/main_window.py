@@ -5,12 +5,12 @@ from PySide6.QtGui import QPixmap, QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QFileDialog, QToolBar, QSplitter, QListWidget,
     QListWidgetItem, QWidget, QVBoxLayout, QLabel, QMessageBox, QSizePolicy,
-    QComboBox,
+    QComboBox, QProgressBar,
 )
 
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
-from .export_worker import ExportWorker
+from .export_worker import ExportWorker, BatchExportWorker
 from .inpainter import LamaInpainter
 from .ocr import MangaOcrReader
 from .translator import MangaTranslator
@@ -47,6 +47,8 @@ class MainWindow(QMainWindow):
         self.page_regions = {}  # page index -> list[dict], keeps edits when flipping pages
         self.page_detections = {}  # page index -> raw detector result {"texts": [...], "bubbles": [...]}
         self._detection_queued = set()  # page indices already sent to the worker
+        self._pages_done = set()  # pages whose detect+OCR+translate pipeline finished
+        self._pending_export_dir = None  # batch export waiting for the pipeline
 
         self.scene = PageScene()
         self.view = PageView(self.scene)
@@ -80,7 +82,10 @@ class MainWindow(QMainWindow):
 
         self.page_label = QLabel("- / -")
         self._build_toolbar()
-        self.statusBar()
+        self.export_progress = QProgressBar()
+        self.export_progress.setMaximumWidth(220)
+        self.export_progress.hide()
+        self.statusBar().addPermanentWidget(self.export_progress)
 
         self.inpainter = LamaInpainter()
         self._export_worker = None
@@ -88,6 +93,7 @@ class MainWindow(QMainWindow):
         self.detection_worker = DetectionWorker(MangaDetector(), MangaOcrReader(), self.translator)
         self.detection_worker.page_detected.connect(self._on_page_detected)
         self.detection_worker.region_translated.connect(self._on_region_translated)
+        self.detection_worker.page_done.connect(self._on_page_pipeline_done)
         self.detection_worker.status_changed.connect(self._on_detection_status)
         self.detection_worker.start()
 
@@ -128,6 +134,10 @@ class MainWindow(QMainWindow):
         self.export_action = QAction("Экспорт страницы...", self)
         self.export_action.triggered.connect(self.export_current_page)
         tb.addAction(self.export_action)
+
+        self.export_all_action = QAction("Экспортировать все...", self)
+        self.export_all_action.triggered.connect(self.export_all_pages)
+        tb.addAction(self.export_all_action)
         tb.addSeparator()
 
         tb.addWidget(QLabel(" Язык: "))
@@ -153,6 +163,7 @@ class MainWindow(QMainWindow):
         self.page_regions = {}
         self.page_detections = {}
         self._detection_queued = set()
+        self._pages_done = set()
         self.current_page = -1
         self.load_page(0)
 
@@ -263,6 +274,19 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(message)
 
     # --- export ------------------------------------------------------------
+    def _set_export_running(self, running: bool, determinate_total: int | None = None):
+        self.export_action.setEnabled(not running)
+        self.export_all_action.setEnabled(not running)
+        if running:
+            if determinate_total:
+                self.export_progress.setRange(0, determinate_total)
+                self.export_progress.setValue(0)
+            else:
+                self.export_progress.setRange(0, 0)  # busy indicator
+            self.export_progress.show()
+        else:
+            self.export_progress.hide()
+
     def export_current_page(self):
         if self.current_page < 0:
             return
@@ -275,19 +299,78 @@ class MainWindow(QMainWindow):
             return
         regions = [r.to_dict() for r in self.scene.regions]
         bubbles = self.page_detections.get(self.current_page, {}).get("bubbles", [])
-        self.export_action.setEnabled(False)
+        self._set_export_running(True)
         self.statusBar().showMessage("Экспорт: вырезание текста и рендеринг...")
         self._export_worker = ExportWorker(src, regions, bubbles, self.inpainter, out_path)
         self._export_worker.finished_ok.connect(self._on_export_done)
         self._export_worker.failed.connect(self._on_export_failed)
         self._export_worker.start()
 
+    def export_all_pages(self):
+        if not self.page_paths:
+            return
+        out_dir = QFileDialog.getExistingDirectory(self, "Папка для экспорта")
+        if not out_dir:
+            return
+        pending = [i for i in range(len(self.page_paths)) if i not in self._pages_done]
+        if pending:
+            # finish the pipeline over every unprocessed page first
+            for i in pending:
+                if i not in self._detection_queued:
+                    self._detection_queued.add(i)
+                    self.detection_worker.enqueue(i, self.page_paths[i])
+            self._pending_export_dir = out_dir
+            self._set_export_running(True, determinate_total=len(self.page_paths))
+            self.export_progress.setValue(len(self._pages_done))
+            self.statusBar().showMessage(
+                f"Ожидание обработки страниц: {len(self._pages_done)} / {len(self.page_paths)}..."
+            )
+        else:
+            self._start_batch_export(out_dir)
+
+    def _on_page_pipeline_done(self, index: int):
+        self._pages_done.add(index)
+        if self._pending_export_dir is None:
+            return
+        done = len([i for i in self._pages_done if i < len(self.page_paths)])
+        self.export_progress.setValue(done)
+        self.statusBar().showMessage(
+            f"Ожидание обработки страниц: {done} / {len(self.page_paths)}..."
+        )
+        if done >= len(self.page_paths):
+            out_dir = self._pending_export_dir
+            self._pending_export_dir = None
+            self._start_batch_export(out_dir)
+
+    def _start_batch_export(self, out_dir: str):
+        self._save_current_page_regions()
+        jobs = []
+        for i, path in enumerate(self.page_paths):
+            if i == self.current_page:
+                regions = [r.to_dict() for r in self.scene.regions]
+            else:
+                regions = self.page_regions.get(i, [])
+            bubbles = self.page_detections.get(i, {}).get("bubbles", [])
+            jobs.append((path, regions, bubbles))
+        self._set_export_running(True, determinate_total=len(jobs))
+        self.statusBar().showMessage("Экспорт всех страниц...")
+        self._export_worker = BatchExportWorker(jobs, self.inpainter, out_dir)
+        self._export_worker.progress.connect(self._on_export_progress)
+        self._export_worker.finished_ok.connect(self._on_export_done)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.start()
+
+    def _on_export_progress(self, done: int, total: int):
+        self.export_progress.setRange(0, total)
+        self.export_progress.setValue(done)
+        self.statusBar().showMessage(f"Экспорт: страница {done} / {total}")
+
     def _on_export_done(self, path: str):
-        self.export_action.setEnabled(True)
+        self._set_export_running(False)
         self.statusBar().showMessage(f"Экспортировано: {path}", 8000)
 
     def _on_export_failed(self, error: str):
-        self.export_action.setEnabled(True)
+        self._set_export_running(False)
         self.statusBar().showMessage("")
         QMessageBox.warning(self, "Ошибка экспорта", error)
 
