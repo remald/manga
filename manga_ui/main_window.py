@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (
 
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
+from .ocr import MangaOcrReader
+from .translator import MangaTranslator
 from .page_scene import PageScene
 from .page_view import PageView
 from .sidebar import RegionEditorPanel
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-PLACEHOLDER_TEXT = "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+PLACEHOLDER_TEXT = "Translation not ready"
 
 
 class MainWindow(QMainWindow):
@@ -63,8 +65,9 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self.statusBar()
 
-        self.detection_worker = DetectionWorker(MangaDetector())
+        self.detection_worker = DetectionWorker(MangaDetector(), MangaOcrReader(), MangaTranslator())
         self.detection_worker.page_detected.connect(self._on_page_detected)
+        self.detection_worker.region_translated.connect(self._on_region_translated)
         self.detection_worker.status_changed.connect(self._on_detection_status)
         self.detection_worker.start()
 
@@ -160,13 +163,15 @@ class MainWindow(QMainWindow):
         if index == self.current_page:
             for det in result["texts"]:
                 rect = QRectF(det["x"], det["y"], det["w"], det["h"])
-                self.scene.add_region(rect, translated_text=PLACEHOLDER_TEXT)
+                item = self.scene.add_region(rect, translated_text=PLACEHOLDER_TEXT)
+                item.region_id = det["id"]
             self._refresh_region_list()
         else:
             # page not on screen: stash regions as dicts, they materialize on load_page
             stored = self.page_regions.setdefault(index, [])
             for det in result["texts"]:
                 stored.append({
+                    "region_id": det["id"],
                     "x": det["x"], "y": det["y"], "w": det["w"], "h": det["h"],
                     "source_text": "", "translated_text": PLACEHOLDER_TEXT,
                     "enabled": True,
@@ -175,6 +180,23 @@ class MainWindow(QMainWindow):
             f"Страница {index + 1}: найдено текста — {len(result['texts'])}, "
             f"пузырьков — {len(result['bubbles'])}", 5000,
         )
+
+    def _on_region_translated(self, index: int, region_id: str, source: str, translation: str):
+        if index == self.current_page:
+            for item in self.scene.regions:
+                if item.region_id == region_id:
+                    item.source_text = source
+                    item.set_translated_text(translation)
+                    if item.isSelected():
+                        self.editor_panel.set_region(item)
+                    self._refresh_region_list()
+                    return
+        # page not on screen (or region was deleted): update the stored dict
+        for data in self.page_regions.get(index, []):
+            if data.get("region_id") == region_id:
+                data["source_text"] = source
+                data["translated_text"] = translation
+                return
 
     def _on_detection_status(self, message: str):
         if message:
@@ -196,6 +218,7 @@ class MainWindow(QMainWindow):
             font_family=data.get("font_family", "Arial"),
             font_size=None if data.get("auto_fit", True) else data.get("font_size", 14),
         )
+        item.region_id = data.get("region_id")
         item.setPos(data["x"], data["y"])
 
     # --- region editing ----------------------------------------------------

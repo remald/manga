@@ -6,7 +6,7 @@ HANDLE_MARGIN = 8.0
 MIN_SIZE = 12.0
 DEFAULT_FONT_FAMILY = "Arial"
 DEFAULT_FONT_SIZE = 14
-MIN_FONT_SIZE = 8   # readability floor for auto-fit and manual choice
+MIN_FONT_SIZE = 5   # readability floor for auto-fit only; manual choice is unrestricted
 MAX_FONT_SIZE = 72
 
 _CURSORS = {
@@ -41,6 +41,7 @@ class TextRegionItem(QGraphicsRectItem):
         )
         self.setAcceptHoverEvents(True)
 
+        self.region_id = None  # links detector output to this region across page flips
         self.source_text = source_text
         self.translated_text = translated_text
         self.translation_enabled = enabled
@@ -79,9 +80,9 @@ class TextRegionItem(QGraphicsRectItem):
             self.fit_font_size()
 
     def set_font_size(self, size: int):
-        # explicit user choice turns auto-fit off for this region
+        # explicit user choice turns auto-fit off for this region, no limits applied
         self.auto_fit = False
-        self.font_size = max(MIN_FONT_SIZE, size)
+        self.font_size = size
         self._apply_font()
 
     def _apply_font(self):
@@ -190,6 +191,7 @@ class TextRegionItem(QGraphicsRectItem):
         r = self.rect()
         pos = self.pos()
         return {
+            "region_id": self.region_id,
             "x": pos.x() + r.x(),
             "y": pos.y() + r.y(),
             "w": r.width(),
