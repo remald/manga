@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         self._detection_queued = set()  # page indices already sent to the worker
         self._pages_done = set()  # pages whose detect+OCR+translate pipeline finished
         self._pending_export_dir = None  # batch export waiting for the pipeline
+        self._pending_single_export = None  # (page index, out path) waiting for the pipeline
 
         self.scene = PageScene()
         self.view = PageView(self.scene)
@@ -297,11 +298,27 @@ class MainWindow(QMainWindow):
         )
         if not out_path:
             return
-        regions = [r.to_dict() for r in self.scene.regions]
-        bubbles = self.page_detections.get(self.current_page, {}).get("bubbles", [])
+        if self.current_page not in self._pages_done:
+            # page is still in the pipeline: export starts when it finishes
+            self._pending_single_export = (self.current_page, out_path)
+            self._set_export_running(True)
+            self.statusBar().showMessage(
+                f"Ожидание обработки страницы {self.current_page + 1} перед экспортом..."
+            )
+            return
+        self._start_single_export(self.current_page, out_path)
+
+    def _start_single_export(self, index: int, out_path: str):
+        if index == self.current_page:
+            regions = [r.to_dict() for r in self.scene.regions]
+        else:
+            regions = self.page_regions.get(index, [])
+        bubbles = self.page_detections.get(index, {}).get("bubbles", [])
         self._set_export_running(True)
         self.statusBar().showMessage("Экспорт: вырезание текста и рендеринг...")
-        self._export_worker = ExportWorker(src, regions, bubbles, self.inpainter, out_path)
+        self._export_worker = ExportWorker(
+            self.page_paths[index], regions, bubbles, self.inpainter, out_path
+        )
         self._export_worker.finished_ok.connect(self._on_export_done)
         self._export_worker.failed.connect(self._on_export_failed)
         self._export_worker.start()
@@ -330,6 +347,11 @@ class MainWindow(QMainWindow):
 
     def _on_page_pipeline_done(self, index: int):
         self._pages_done.add(index)
+        if self._pending_single_export is not None and self._pending_single_export[0] == index:
+            _, out_path = self._pending_single_export
+            self._pending_single_export = None
+            self._start_single_export(index, out_path)
+            return
         if self._pending_export_dir is None:
             return
         done = len([i for i in self._pages_done if i < len(self.page_paths)])

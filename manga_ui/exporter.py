@@ -1,6 +1,9 @@
 import numpy as np
 from PIL import Image
-from PySide6.QtGui import QImage, QPainter, QFont, QTextDocument
+from PySide6.QtGui import (
+    QImage, QPainter, QFont, QTextDocument, QColor, QPalette,
+    QAbstractTextDocumentLayout,
+)
 
 from .region_item import (
     DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE,
@@ -98,13 +101,33 @@ def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter)
             doc.setDefaultFont(QFont(family, size))
             doc.setPlainText(r["translated_text"])
             doc.setTextWidth(r["w"])
-            painter.save()
-            painter.translate(r["x"], r["y"])
-            doc.drawContents(painter)
-            painter.restore()
+            # text over inpainted background gets a white outline for legibility
+            outline = max(2, round(size / 10)) if r in outside else 0
+            _draw_document(painter, doc, r["x"], r["y"], outline)
     finally:
         painter.end()
     return qimage
+
+
+def _draw_document(painter: QPainter, doc: QTextDocument, x: float, y: float, outline: int):
+    """Draws the laid-out text; with outline > 0, stamps it in white in 8
+    offset directions first, then draws the black text on top."""
+
+    def draw_at(dx, dy, color):
+        ctx = QAbstractTextDocumentLayout.PaintContext()
+        ctx.palette.setColor(QPalette.Text, color)
+        painter.save()
+        painter.translate(x + dx, y + dy)
+        doc.documentLayout().draw(painter, ctx)
+        painter.restore()
+
+    if outline > 0:
+        white = QColor("white")
+        for dx in (-outline, 0, outline):
+            for dy in (-outline, 0, outline):
+                if dx or dy:
+                    draw_at(dx, dy, white)
+    draw_at(0, 0, QColor("black"))
 
 
 def _fit_font_size(text: str, family: str, width: float, height: float) -> int:
