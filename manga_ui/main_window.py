@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
+from .export_worker import ExportWorker
+from .inpainter import LamaInpainter
 from .ocr import MangaOcrReader
 from .translator import MangaTranslator
 from .page_scene import PageScene
@@ -65,6 +67,8 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self.statusBar()
 
+        self.inpainter = LamaInpainter()
+        self._export_worker = None
         self.detection_worker = DetectionWorker(MangaDetector(), MangaOcrReader(), MangaTranslator())
         self.detection_worker.page_detected.connect(self._on_page_detected)
         self.detection_worker.region_translated.connect(self._on_region_translated)
@@ -103,6 +107,11 @@ class MainWindow(QMainWindow):
         delete_action.setShortcut(QKeySequence("Delete"))
         delete_action.triggered.connect(self.delete_selected_region)
         tb.addAction(delete_action)
+        tb.addSeparator()
+
+        self.export_action = QAction("Экспорт страницы...", self)
+        self.export_action.triggered.connect(self.export_current_page)
+        tb.addAction(self.export_action)
 
     # --- folder / page navigation ----------------------------------------
     def open_folder(self):
@@ -154,6 +163,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.detection_worker.stop()
         self.detection_worker.wait(5000)
+        if self._export_worker is not None:
+            self._export_worker.wait(10000)
         super().closeEvent(event)
 
     # --- detection ---------------------------------------------------------
@@ -201,6 +212,35 @@ class MainWindow(QMainWindow):
     def _on_detection_status(self, message: str):
         if message:
             self.statusBar().showMessage(message)
+
+    # --- export ------------------------------------------------------------
+    def export_current_page(self):
+        if self.current_page < 0:
+            return
+        src = self.page_paths[self.current_page]
+        default = str(src.with_name(f"{src.stem}_translated.png"))
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт страницы", default, "Изображения (*.png *.jpg *.webp)"
+        )
+        if not out_path:
+            return
+        regions = [r.to_dict() for r in self.scene.regions]
+        bubbles = self.page_detections.get(self.current_page, {}).get("bubbles", [])
+        self.export_action.setEnabled(False)
+        self.statusBar().showMessage("Экспорт: вырезание текста и рендеринг...")
+        self._export_worker = ExportWorker(src, regions, bubbles, self.inpainter, out_path)
+        self._export_worker.finished_ok.connect(self._on_export_done)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.start()
+
+    def _on_export_done(self, path: str):
+        self.export_action.setEnabled(True)
+        self.statusBar().showMessage(f"Экспортировано: {path}", 8000)
+
+    def _on_export_failed(self, error: str):
+        self.export_action.setEnabled(True)
+        self.statusBar().showMessage("")
+        QMessageBox.warning(self, "Ошибка экспорта", error)
 
     # --- region <-> per-page storage --------------------------------------
     def _save_current_page_regions(self):
