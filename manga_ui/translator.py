@@ -15,7 +15,8 @@ class MangaTranslator:
     def _ensure_loaded(self):
         if self._llm is None:
             from llama_cpp import Llama
-            self._llm = Llama(self.model_path, n_ctx=2048, verbose=False)
+            # ignored by CPU builds of llama.cpp; offloads all layers on CUDA builds
+            self._llm = Llama(self.model_path, n_ctx=2048, n_gpu_layers=-1, verbose=False)
 
     def translate(self, text: str) -> str:
         text = text.strip()
