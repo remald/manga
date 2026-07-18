@@ -4,6 +4,8 @@ from uuid import uuid4
 from PIL import Image
 from PySide6.QtCore import QThread, Signal
 
+from .box_layout import region_center_in_bubble
+
 
 def sort_reading_order(texts: list, page_height: int) -> list:
     """Manga reading order: top-to-bottom in horizontal bands, right-to-left
@@ -76,7 +78,14 @@ class DetectionWorker(QThread):
             return
 
         image = Image.open(path).convert("RGB")
-        result["texts"] = sort_reading_order(result["texts"], image.height)
+        ordered = sort_reading_order(result["texts"], image.height)
+        # dialogue first, out-of-bubble text (SFX/signs) last, so it doesn't
+        # break dialogue context in the numbered translation batch
+        bubbles = result["bubbles"]
+        result["texts"] = (
+            [t for t in ordered if region_center_in_bubble(t, bubbles)]
+            + [t for t in ordered if not region_center_in_bubble(t, bubbles)]
+        )
         for det in result["texts"]:
             det["id"] = uuid4().hex
         self.page_detected.emit(index, result)

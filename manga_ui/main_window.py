@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QComboBox, QProgressBar,
 )
 
+from .box_layout import widen_boxes_in_bubbles
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
 from .export_worker import ExportWorker, BatchExportWorker
@@ -20,6 +21,9 @@ from .sidebar import RegionEditorPanel
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 PLACEHOLDER_TEXT = "Translation not ready"
+
+# hieroglyphic targets read fine in narrow vertical boxes — skip widening
+CJK_TARGETS = {"Chinese"}
 
 # display label -> full English name for the HY-MT prompt
 TARGET_LANGUAGES = {
@@ -210,18 +214,26 @@ class MainWindow(QMainWindow):
     def _on_page_detected(self, index: int, result: dict):
         self.page_detections[index] = result
 
+        # widen copies only: the worker still crops OCR from the original boxes
+        originals = result["texts"]
+        texts = originals
+        if self.translator.target_language not in CJK_TARGETS:
+            texts = widen_boxes_in_bubbles(originals, result["bubbles"])
+
         if index == self.current_page:
-            for det in result["texts"]:
+            for orig, det in zip(originals, texts):
                 rect = QRectF(det["x"], det["y"], det["w"], det["h"])
                 item = self.scene.add_region(rect, translated_text=PLACEHOLDER_TEXT)
                 item.region_id = det["id"]
+                item.source_box = {k: orig[k] for k in ("x", "y", "w", "h")}
             self._refresh_region_list()
         else:
             # page not on screen: stash regions as dicts, they materialize on load_page
             stored = self.page_regions.setdefault(index, [])
-            for det in result["texts"]:
+            for orig, det in zip(originals, texts):
                 stored.append({
                     "region_id": det["id"],
+                    "source_box": {k: orig[k] for k in ("x", "y", "w", "h")},
                     "x": det["x"], "y": det["y"], "w": det["w"], "h": det["h"],
                     "source_text": "", "translated_text": PLACEHOLDER_TEXT,
                     "enabled": True,
@@ -413,6 +425,7 @@ class MainWindow(QMainWindow):
             font_size=None if data.get("auto_fit", True) else data.get("font_size", 14),
         )
         item.region_id = data.get("region_id")
+        item.source_box = data.get("source_box")
         item.setPos(data["x"], data["y"])
 
     # --- region editing ----------------------------------------------------

@@ -5,6 +5,7 @@ from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
 )
 
+from .box_layout import region_center_in_bubble
 from .region_item import (
     DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE,
 )
@@ -14,13 +15,12 @@ INPAINT_PAD = 5   # px around a text box in the LaMa mask
 RING_WIDTH = 6    # px sampling ring around a text box for the bubble tone
 
 
-def region_center_in_bubble(region: dict, bubbles: list[dict]) -> bool:
-    cx = region["x"] + region["w"] / 2
-    cy = region["y"] + region["h"] / 2
-    return any(
-        b["x"] <= cx <= b["x"] + b["w"] and b["y"] <= cy <= b["y"] + b["h"]
-        for b in bubbles
-    )
+def _erase_box(region: dict) -> dict:
+    """The rect to erase: the originally detected text box, not the possibly
+    widened/moved region rect. Hand-drawn regions have no source_box."""
+    return region.get("source_box") or {
+        "x": region["x"], "y": region["y"], "w": region["w"], "h": region["h"],
+    }
 
 
 def _sample_bubble_tone(arr: np.ndarray, region: dict) -> tuple:
@@ -61,23 +61,26 @@ def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter)
     in_bubble = [r for r in active if region_center_in_bubble(r, bubbles)]
     outside = [r for r in active if r not in in_bubble]
 
-    # 1) erase text inside bubbles with the bubble tone
+    # 1) erase text inside bubbles with the bubble tone (original box only,
+    # so the sampling ring and the fill never touch the bubble outline)
     for r in in_bubble:
-        tone = _sample_bubble_tone(arr, r)
-        x0 = max(0, int(r["x"]) - FILL_PAD)
-        y0 = max(0, int(r["y"]) - FILL_PAD)
-        x1 = min(w, int(r["x"] + r["w"]) + FILL_PAD)
-        y1 = min(h, int(r["y"] + r["h"]) + FILL_PAD)
+        box = _erase_box(r)
+        tone = _sample_bubble_tone(arr, box)
+        x0 = max(0, int(box["x"]) - FILL_PAD)
+        y0 = max(0, int(box["y"]) - FILL_PAD)
+        x1 = min(w, int(box["x"] + box["w"]) + FILL_PAD)
+        y1 = min(h, int(box["y"] + box["h"]) + FILL_PAD)
         arr[y0:y1, x0:x1] = tone
 
     # 2) erase text outside bubbles with one LaMa pass over a combined mask
     if outside:
         mask = np.zeros((h, w), dtype=np.uint8)
         for r in outside:
-            x0 = max(0, int(r["x"]) - INPAINT_PAD)
-            y0 = max(0, int(r["y"]) - INPAINT_PAD)
-            x1 = min(w, int(r["x"] + r["w"]) + INPAINT_PAD)
-            y1 = min(h, int(r["y"] + r["h"]) + INPAINT_PAD)
+            box = _erase_box(r)
+            x0 = max(0, int(box["x"]) - INPAINT_PAD)
+            y0 = max(0, int(box["y"]) - INPAINT_PAD)
+            x1 = min(w, int(box["x"] + box["w"]) + INPAINT_PAD)
+            y1 = min(h, int(box["y"] + box["h"]) + INPAINT_PAD)
             mask[y0:y1, x0:x1] = 255
         inpainted = inpainter.inpaint(Image.fromarray(arr), Image.fromarray(mask, "L"))
         arr = np.array(inpainted.convert("RGB"))[:h, :w]

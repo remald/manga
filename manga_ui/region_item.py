@@ -42,6 +42,7 @@ class TextRegionItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
 
         self.region_id = None  # links detector output to this region across page flips
+        self.source_box = None  # original detected rect {x,y,w,h}: where the source text really is
         self.source_text = source_text
         self.translated_text = translated_text
         self.translation_enabled = enabled
@@ -192,6 +193,7 @@ class TextRegionItem(QGraphicsRectItem):
         pos = self.pos()
         return {
             "region_id": self.region_id,
+            "source_box": self.source_box,
             "x": pos.x() + r.x(),
             "y": pos.y() + r.y(),
             "w": r.width(),
