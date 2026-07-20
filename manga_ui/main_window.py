@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QPixmap, QAction, QKeySequence
@@ -13,7 +14,7 @@ from .detection_worker import DetectionWorker
 from .detector import MangaDetector
 from .export_worker import ExportWorker, BatchExportWorker
 from .inpainter import LamaInpainter
-from .ocr import MangaOcrReader
+from .ocr import OcrRouter
 from .translator import MangaTranslator
 from .page_scene import PageScene
 from .page_view import PageView
@@ -24,6 +25,21 @@ PLACEHOLDER_TEXT = "Translation not ready"
 
 # hieroglyphic targets read fine in narrow vertical boxes — skip widening
 CJK_TARGETS = {"Chinese"}
+
+# display label -> full English name; keys must exist in ocr.EASYOCR_CODES
+# (except Japanese, which goes through Manga OCR)
+SOURCE_LANGUAGES = {
+    "Японский": "Japanese",
+    "Английский": "English",
+    "Китайский": "Chinese",
+    "Корейский": "Korean",
+    "Испанский": "Spanish",
+    "Французский": "French",
+    "Немецкий": "German",
+    "Португальский": "Portuguese",
+    "Итальянский": "Italian",
+    "Русский": "Russian",
+}
 
 # display label -> full English name for the HY-MT prompt
 TARGET_LANGUAGES = {
@@ -52,6 +68,7 @@ class MainWindow(QMainWindow):
         self.page_detections = {}  # page index -> raw detector result {"texts": [...], "bubbles": [...]}
         self._detection_queued = set()  # page indices already sent to the worker
         self._pages_done = set()  # pages whose detect+OCR+translate pipeline finished
+        self._pipeline_gen = 0  # bumped on folder open / source-language switch; stale worker results are dropped
         self._pending_export_dir = None  # batch export waiting for the pipeline
         self._pending_single_export = None  # (page index, out path) waiting for the pipeline
 
@@ -95,7 +112,8 @@ class MainWindow(QMainWindow):
         self.inpainter = LamaInpainter()
         self._export_worker = None
         self.translator = MangaTranslator()
-        self.detection_worker = DetectionWorker(MangaDetector(), MangaOcrReader(), self.translator)
+        self.ocr = OcrRouter()
+        self.detection_worker = DetectionWorker(MangaDetector(), self.ocr, self.translator)
         self.detection_worker.page_detected.connect(self._on_page_detected)
         self.detection_worker.region_translated.connect(self._on_region_translated)
         self.detection_worker.page_done.connect(self._on_page_pipeline_done)
@@ -145,7 +163,13 @@ class MainWindow(QMainWindow):
         tb.addAction(self.export_all_action)
         tb.addSeparator()
 
-        tb.addWidget(QLabel(" Язык: "))
+        tb.addWidget(QLabel(" Оригинал: "))
+        self.source_language_combo = QComboBox()
+        self.source_language_combo.addItems(SOURCE_LANGUAGES.keys())
+        self.source_language_combo.currentTextChanged.connect(self._on_source_language_changed)
+        tb.addWidget(self.source_language_combo)
+
+        tb.addWidget(QLabel(" Перевод: "))
         self.language_combo = QComboBox()
         self.language_combo.addItems(TARGET_LANGUAGES.keys())
         self.language_combo.currentTextChanged.connect(self._on_language_changed)
@@ -164,6 +188,8 @@ class MainWindow(QMainWindow):
         if not paths:
             QMessageBox.warning(self, "Нет изображений", "В папке не найдено изображений.")
             return
+        self.detection_worker.clear_pending()
+        self._pipeline_gen += 1
         self.page_paths = paths
         self.page_regions = {}
         self.page_detections = {}
@@ -190,7 +216,7 @@ class MainWindow(QMainWindow):
 
         if index not in self._detection_queued:
             self._detection_queued.add(index)
-            self.detection_worker.enqueue(index, self.page_paths[index])
+            self.detection_worker.enqueue(index, self.page_paths[index], self._pipeline_gen)
 
     def next_page(self):
         self.load_page(self.current_page + 1)
@@ -211,7 +237,9 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     # --- detection ---------------------------------------------------------
-    def _on_page_detected(self, index: int, result: dict):
+    def _on_page_detected(self, generation: int, index: int, result: dict):
+        if generation != self._pipeline_gen:
+            return  # task from before a folder open / source-language switch
         self.page_detections[index] = result
 
         # widen copies only: the worker still crops OCR from the original boxes
@@ -276,6 +304,27 @@ class MainWindow(QMainWindow):
             )
             return
         self.detection_worker.enqueue_retranslation(self.current_page, fragments)
+
+    def _on_source_language_changed(self, label: str):
+        lang = SOURCE_LANGUAGES[label]
+        self.ocr.source_language = lang
+        self.translator.source_language = lang
+        if not self.page_paths:
+            return
+        # everything OCR'd so far is in the wrong language: drop queued work
+        # and stored results, reprocess pages as they are visited
+        self.detection_worker.clear_pending()
+        self._pipeline_gen += 1
+        self.page_regions = {}
+        self.page_detections = {}
+        self._detection_queued = set()
+        self._pages_done = set()
+        current = self.current_page
+        self.current_page = -1  # load_page must not save the stale regions
+        self.load_page(current)
+        self.statusBar().showMessage(
+            f"Исходный язык: {label}. Страницы распознаются заново.", 5000
+        )
 
     def _on_language_changed(self, label: str):
         # a plain str assignment is atomic, safe to do while the worker runs;
@@ -347,7 +396,7 @@ class MainWindow(QMainWindow):
             for i in pending:
                 if i not in self._detection_queued:
                     self._detection_queued.add(i)
-                    self.detection_worker.enqueue(i, self.page_paths[i])
+                    self.detection_worker.enqueue(i, self.page_paths[i], self._pipeline_gen)
             self._pending_export_dir = out_dir
             self._set_export_running(True, determinate_total=len(self.page_paths))
             self.export_progress.setValue(len(self._pages_done))
@@ -357,7 +406,9 @@ class MainWindow(QMainWindow):
         else:
             self._start_batch_export(out_dir)
 
-    def _on_page_pipeline_done(self, index: int):
+    def _on_page_pipeline_done(self, generation: int, index: int):
+        if generation != self._pipeline_gen:
+            return
         self._pages_done.add(index)
         if self._pending_single_export is not None and self._pending_single_export[0] == index:
             _, out_path = self._pending_single_export
@@ -430,9 +481,17 @@ class MainWindow(QMainWindow):
 
     # --- region editing ----------------------------------------------------
     def _on_region_created(self, rect):
-        self.scene.add_region(rect, translated_text="", source_text="")
+        item = self.scene.add_region(rect, translated_text=PLACEHOLDER_TEXT, source_text="")
         self._refresh_region_list()
         self.draw_action.setChecked(False)
+        if self.current_page < 0:
+            return
+        item.region_id = uuid4().hex
+        item.source_box = {"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()}
+        self.detection_worker.enqueue_region(
+            self.current_page, self.page_paths[self.current_page],
+            item.region_id, item.source_box,
+        )
 
     def delete_selected_region(self):
         for item in list(self.scene.selectedItems()):

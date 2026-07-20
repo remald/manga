@@ -7,10 +7,17 @@ class MangaTranslator:
     """HY-MT1.5-1.8B (Tencent Hunyuan-MT) via llama.cpp, CPU inference.
     Lazy-loaded; call only from the worker thread."""
 
-    def __init__(self, model_path=GGUF_PATH, target_language="Russian"):
+    def __init__(self, model_path=GGUF_PATH, target_language="Russian", source_language="Japanese"):
         self.model_path = str(model_path)
         self.target_language = target_language
+        self.source_language = source_language
         self._llm = None
+
+    def _prompt_prefix(self) -> str:
+        return (
+            f"Translate the following segment from {self.source_language} "
+            f"into {self.target_language}, without additional explanation."
+        )
 
     def _ensure_loaded(self):
         if self._llm is None:
@@ -23,8 +30,7 @@ class MangaTranslator:
         if not text:
             return ""
         return self._complete(
-            f"Translate the following segment into {self.target_language}, "
-            f"without additional explanation.\n\n{text}",
+            f"{self._prompt_prefix()}\n\n{text}",
             max_tokens=512,
         )
 
@@ -37,8 +43,7 @@ class MangaTranslator:
         if not numbered:
             return ["" for _ in texts]
         out = self._complete(
-            f"Translate the following segment into {self.target_language}, "
-            f"without additional explanation.\n\n{numbered}",
+            f"{self._prompt_prefix()}\n\n{numbered}",
             max_tokens=min(2048, 128 + 96 * len(texts)),
         )
         import re
