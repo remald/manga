@@ -50,6 +50,11 @@ class DetectionWorker(QThread):
         """OCR + translate a single manually drawn box {x,y,w,h}."""
         self._queue.put(("region", page_index, (str(image_path), region_id, box)))
 
+    def process_page(self, page_index: int, image_path):
+        """Synchronous detect+OCR+translate for CLI batch mode: runs in the
+        caller's thread, results arrive through the same signals."""
+        self._run_detection(page_index, str(image_path), 0)
+
     def clear_pending(self):
         """Drops queued tasks (the one already running finishes anyway);
         used when a source-language switch makes them obsolete."""
