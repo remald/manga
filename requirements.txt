@@ -1,0 +1,32 @@
+# Python 3.11, CPU-only (see manga_ui/models/ for the two local checkpoints:
+# RF-DETR fine-tune and the HY-MT GGUF; manga-ocr/easyocr/lama fetch their
+# own weights on first use).
+#
+# Install in two steps:
+#   pip install -r requirements.txt
+#   pip install --no-deps simple-lama-inpainting==0.1.2
+#
+# simple-lama-inpainting is listed below but pip can't resolve it in the
+# same pass: its metadata pins numpy<2/Pillow<10, which conflicts with
+# manga-ocr's Pillow>=10. In practice it runs fine against the newer
+# versions (checked against numpy 2.4.6 / Pillow 12.3), so it's installed
+# separately with --no-deps once everything else is in place.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+
+PySide6==6.11.1
+
+rfdetr==1.8.3
+manga-ocr==0.1.15
+easyocr==1.7.2
+llama-cpp-python==0.3.34
+# simple-lama-inpainting installed separately below (see note above)
+
+numpy==2.4.6
+pillow==12.3.0
+opencv-python==4.11.0.86
+opencv-python-headless==5.0.0.93
+shapely==2.1.2
+pyclipper==1.4.0
