@@ -40,7 +40,9 @@ class EasyOcrReader:
     def _ensure_loaded(self):
         if self._reader is None:
             import easyocr
-            self._reader = easyocr.Reader(self._lang_codes, gpu=False, verbose=False)
+            # gpu=True asks for CUDA/MPS but easyocr falls back to CPU itself
+            # when neither is available, so this is safe on CPU-only machines
+            self._reader = easyocr.Reader(self._lang_codes, gpu=True, verbose=False)
 
     def read(self, pil_image) -> str:
         self._ensure_loaded()
