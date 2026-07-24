@@ -1,13 +1,24 @@
 from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QPen, QBrush, QColor, QFont
+from PySide6.QtGui import QPen, QBrush, QColor, QFont, QTextCursor, QTextBlockFormat
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsTextItem, QGraphicsItem
 
 HANDLE_MARGIN = 8.0
 MIN_SIZE = 12.0
-DEFAULT_FONT_FAMILY = "Arial"
+DEFAULT_FONT_FAMILY = "Pangolin"  # bundled comic font (manga_ui/fonts), see appfonts.py
 DEFAULT_FONT_SIZE = 14
 MIN_FONT_SIZE = 5   # readability floor for auto-fit only; manual choice is unrestricted
 MAX_FONT_SIZE = 72
+LINE_HEIGHT_PCT = 85  # line spacing as % of font height; tight for comic lettering
+
+
+def apply_line_height(document, pct: int = LINE_HEIGHT_PCT):
+    """Sets proportional line spacing on every block of a QTextDocument.
+    setPlainText resets block formats, so call after setting the text."""
+    cursor = QTextCursor(document)
+    cursor.select(QTextCursor.Document)
+    fmt = QTextBlockFormat()
+    fmt.setLineHeight(pct, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+    cursor.mergeBlockFormat(fmt)
 
 _CURSORS = {
     "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
@@ -79,12 +90,15 @@ class TextRegionItem(QGraphicsRectItem):
         self._apply_font()
         if self.auto_fit:
             self.fit_font_size()
+        else:
+            self._center_vertically()
 
     def set_font_size(self, size: int):
         # explicit user choice turns auto-fit off for this region, no limits applied
         self.auto_fit = False
         self.font_size = size
         self._apply_font()
+        self._center_vertically()
 
     def _apply_font(self):
         self.text_item.setFont(QFont(self.font_family, self.font_size))
@@ -105,6 +119,7 @@ class TextRegionItem(QGraphicsRectItem):
                 hi = mid - 1
         self.font_size = best
         self._apply_font()
+        self._center_vertically()
         self._notify_autofit()
 
     def _text_fits(self, size: int) -> bool:
@@ -119,11 +134,21 @@ class TextRegionItem(QGraphicsRectItem):
 
     def _refresh_text(self):
         self.text_item.setPlainText(self.translated_text if self.translation_enabled else "")
+        apply_line_height(self.text_item.document())
+        self._center_vertically()
 
     def _layout_text(self):
         r = self.rect()
-        self.text_item.setPos(r.topLeft())
         self.text_item.setTextWidth(max(r.width(), 1))
+        option = self.text_item.document().defaultTextOption()
+        option.setAlignment(Qt.AlignHCenter)
+        self.text_item.document().setDefaultTextOption(option)
+        self._center_vertically()
+
+    def _center_vertically(self):
+        r = self.rect()
+        text_h = self.text_item.document().size().height()
+        self.text_item.setPos(r.left(), r.top() + max(0.0, (r.height() - text_h) / 2))
 
     def _update_style(self):
         if self.translation_enabled:

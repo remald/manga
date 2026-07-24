@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox, QProgressBar,
 )
 
+from .appfonts import load_bundled_fonts
 from .box_layout import widen_boxes_in_bubbles
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
@@ -59,6 +60,7 @@ TARGET_LANGUAGES = {
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        load_bundled_fonts()  # register the bundled comic font before any region renders
         self.setWindowTitle("Manga Translator")
         self.resize(1400, 900)
 

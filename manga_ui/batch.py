@@ -1,6 +1,7 @@
 """Headless batch mode: the full pipeline over a folder in one run."""
 from pathlib import Path
 
+from .appfonts import load_bundled_fonts
 from .box_layout import widen_boxes_in_bubbles
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
@@ -28,6 +29,7 @@ def translate_folder(
     if not paths:
         raise ValueError(f"в папке нет изображений: {input_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
+    load_bundled_fonts()  # the renderer uses the bundled comic font by default
 
     translator = MangaTranslator(
         target_language=target_language, source_language=source_language

@@ -2,13 +2,15 @@ import cv2
 import numpy as np
 from PIL import Image
 from scipy import ndimage
+from PySide6.QtCore import Qt
 from PySide6.QtGui import (
-    QImage, QPainter, QFont, QTextDocument, QColor, QPalette,
+    QImage, QPainter, QFont, QTextDocument, QTextOption, QColor, QPalette,
     QAbstractTextDocumentLayout,
 )
 
 from .box_layout import region_center_in_bubble
 from .region_item import (
+    apply_line_height,
     DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE,
 )
 
@@ -155,12 +157,16 @@ def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter)
                 )
             doc = QTextDocument()
             doc.setDefaultFont(QFont(family, size))
+            doc.setDefaultTextOption(QTextOption(Qt.AlignHCenter))
             doc.setPlainText(r["translated_text"])
+            apply_line_height(doc)
             doc.setTextWidth(r["w"])
             # white outline everywhere: on art it's essential, in bubbles it's
             # invisible on intact white and keeps text readable on a damaged one
             outline = max(2, round(size / 10))
-            _draw_document(painter, doc, r["x"], r["y"], outline)
+            # center vertically in the box, matching the editor
+            ty = r["y"] + max(0.0, (r["h"] - doc.size().height()) / 2)
+            _draw_document(painter, doc, r["x"], ty, outline)
     finally:
         painter.end()
     return qimage
@@ -192,6 +198,7 @@ def _fit_font_size(text: str, family: str, width: float, height: float) -> int:
     shown in the editor."""
     doc = QTextDocument()
     doc.setPlainText(text)
+    apply_line_height(doc)
     doc.setTextWidth(width)
     lo, hi, best = MIN_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE
     while lo <= hi:
