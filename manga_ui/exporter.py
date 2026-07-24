@@ -1,5 +1,7 @@
+import cv2
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 from PySide6.QtGui import (
     QImage, QPainter, QFont, QTextDocument, QColor, QPalette,
     QAbstractTextDocumentLayout,
@@ -10,9 +12,10 @@ from .region_item import (
     DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE,
 )
 
-FILL_PAD = 3      # px around a text box when painting it over with bubble tone
 INPAINT_PAD = 5   # px around a text box in the LaMa mask
-RING_WIDTH = 6    # px sampling ring around a text box for the bubble tone
+BUBBLE_PAD = 4    # px around the bubble bbox in the segmentation crop
+BUBBLE_RING = 6   # px ring around a text box that votes for the interior component
+MIN_BOX_COVERAGE = 0.85  # interior must cover this share of a text box, else LaMa
 
 
 def _erase_box(region: dict) -> dict:
@@ -23,59 +26,109 @@ def _erase_box(region: dict) -> dict:
     }
 
 
-def _sample_bubble_tone(arr: np.ndarray, region: dict) -> tuple:
-    """Median color of a thin ring just outside the text box — mostly bubble
-    background, and the median discards stray text-stroke pixels."""
-    h, w = arr.shape[:2]
-    x0 = max(0, int(region["x"]) - RING_WIDTH)
-    y0 = max(0, int(region["y"]) - RING_WIDTH)
-    x1 = min(w, int(region["x"] + region["w"]) + RING_WIDTH)
-    y1 = min(h, int(region["y"] + region["h"]) + RING_WIDTH)
-    ix0 = min(x1, int(region["x"]))
-    iy0 = min(y1, int(region["y"]))
-    ix1 = max(x0, int(region["x"] + region["w"]))
-    iy1 = max(y0, int(region["y"] + region["h"]))
+def _bubble_of(region: dict, bubbles: list) -> int | None:
+    box = _erase_box(region)
+    cx = box["x"] + box["w"] / 2
+    cy = box["y"] + box["h"] / 2
+    for i, b in enumerate(bubbles):
+        if b["x"] <= cx <= b["x"] + b["w"] and b["y"] <= cy <= b["y"] + b["h"]:
+            return i
+    return None
 
-    ring = np.ones((h, w), dtype=bool)
-    ring[:y0, :] = False
-    ring[y1:, :] = False
-    ring[:, :x0] = False
-    ring[:, x1:] = False
-    ring[iy0:iy1, ix0:ix1] = False
-    pixels = arr[ring]
-    if len(pixels) == 0:
-        return (255, 255, 255)
-    return tuple(int(v) for v in np.median(pixels, axis=0))
+
+def _fill_bubble_interior(arr: np.ndarray, bubble: dict, regions: list) -> bool:
+    """Repaints the bubble interior — the light connected component around the
+    text, holes (text strokes) included — with its median tone, staying exactly
+    inside the dark outline. Returns False when segmentation doesn't add up
+    (inverted/open bubble, text sticking out): caller falls back to LaMa."""
+    h, w = arr.shape[:2]
+    x0 = max(0, int(bubble["x"]) - BUBBLE_PAD)
+    y0 = max(0, int(bubble["y"]) - BUBBLE_PAD)
+    x1 = min(w, int(bubble["x"] + bubble["w"]) + BUBBLE_PAD)
+    y1 = min(h, int(bubble["y"] + bubble["h"]) + BUBBLE_PAD)
+    crop = arr[y0:y1, x0:x1]
+    if crop.size == 0:
+        return False
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, light = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, labels = cv2.connectedComponents((light > 0).astype(np.uint8))
+
+    # the interior is the light component surrounding the text boxes: collect
+    # label votes from a thin ring around each box (label 0 = dark pixels)
+    votes = np.zeros(labels.max() + 1, dtype=np.int64)
+    ch, cw = labels.shape
+    boxes = []
+    for r in regions:
+        box = _erase_box(r)
+        bx0 = int(box["x"]) - x0
+        by0 = int(box["y"]) - y0
+        bx1 = int(box["x"] + box["w"]) - x0
+        by1 = int(box["y"] + box["h"]) - y0
+        boxes.append((bx0, by0, bx1, by1))
+        rx0 = max(0, bx0 - BUBBLE_RING)
+        ry0 = max(0, by0 - BUBBLE_RING)
+        rx1 = min(cw, bx1 + BUBBLE_RING)
+        ry1 = min(ch, by1 + BUBBLE_RING)
+        ring = np.zeros((ch, cw), dtype=bool)
+        ring[ry0:ry1, rx0:rx1] = True
+        ring[max(0, by0):by1, max(0, bx0):bx1] = False
+        votes += np.bincount(labels[ring].ravel(), minlength=len(votes))
+    votes[0] = 0
+    if votes.sum() == 0:
+        return False
+
+    interior = labels == votes.argmax()
+    filled = ndimage.binary_fill_holes(interior)
+
+    # a closed bubble may touch the crop border at tangent arcs, but its
+    # corners always stay outside the interior; a filled corner means the
+    # component leaked through a gap (tail, broken outline) onto the page
+    # background — painting that would stamp a flat rectangle
+    k = BUBBLE_PAD
+    if (filled[:k, :k].any() or filled[:k, -k:].any()
+            or filled[-k:, :k].any() or filled[-k:, -k:].any()):
+        return False
+
+    # every text box must lie (almost) fully inside the segmented interior
+    for bx0, by0, bx1, by1 in boxes:
+        patch = filled[max(0, by0):by1, max(0, bx0):bx1]
+        if patch.size == 0 or patch.mean() < MIN_BOX_COVERAGE:
+            return False
+
+    tone = np.median(crop[interior], axis=0)
+    crop[filled] = tone.astype(arr.dtype)
+    return True
 
 
 def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter) -> QImage:
-    """Renders the translated page: original text erased (bubble-tone fill
-    inside bubbles, LaMa inpainting outside), translations drawn on top with
-    the exact editor font settings. Regions with translation disabled are
-    left untouched."""
+    """Renders the translated page: in-bubble text erased by repainting the
+    segmented bubble interior with its tone, everything else (and bubbles
+    where segmentation fails) by one LaMa pass; translations drawn on top
+    with the exact editor font settings. Regions with translation disabled
+    are left untouched."""
     image = Image.open(image_path).convert("RGB")
     arr = np.array(image)
     h, w = arr.shape[:2]
 
     active = [r for r in regions if r["enabled"] and r["translated_text"].strip()]
-    in_bubble = [r for r in active if region_center_in_bubble(r, bubbles)]
-    outside = [r for r in active if r not in in_bubble]
+    outside = [r for r in active if not region_center_in_bubble(r, bubbles)]
 
-    # 1) erase text inside bubbles with the bubble tone (original box only,
-    # so the sampling ring and the fill never touch the bubble outline)
-    for r in in_bubble:
-        box = _erase_box(r)
-        tone = _sample_bubble_tone(arr, box)
-        x0 = max(0, int(box["x"]) - FILL_PAD)
-        y0 = max(0, int(box["y"]) - FILL_PAD)
-        x1 = min(w, int(box["x"] + box["w"]) + FILL_PAD)
-        y1 = min(h, int(box["y"] + box["h"]) + FILL_PAD)
-        arr[y0:y1, x0:x1] = tone
+    # 1) erase in-bubble text by repainting each bubble's interior with its
+    # median tone, exactly up to the outline
+    by_bubble = {}
+    for r in active:
+        if r not in outside:
+            by_bubble.setdefault(_bubble_of(r, bubbles), []).append(r)
+    lama_regions = list(outside)
+    for bi, regs in by_bubble.items():
+        if bi is None or not _fill_bubble_interior(arr, bubbles[bi], regs):
+            lama_regions.extend(regs)
 
-    # 2) erase text outside bubbles with one LaMa pass over a combined mask
-    if outside:
+    # 2) erase the rest with one LaMa pass over a combined mask
+    if lama_regions:
         mask = np.zeros((h, w), dtype=np.uint8)
-        for r in outside:
+        for r in lama_regions:
             box = _erase_box(r)
             x0 = max(0, int(box["x"]) - INPAINT_PAD)
             y0 = max(0, int(box["y"]) - INPAINT_PAD)
@@ -104,8 +157,9 @@ def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter)
             doc.setDefaultFont(QFont(family, size))
             doc.setPlainText(r["translated_text"])
             doc.setTextWidth(r["w"])
-            # text over inpainted background gets a white outline for legibility
-            outline = max(2, round(size / 10)) if r in outside else 0
+            # white outline everywhere: on art it's essential, in bubbles it's
+            # invisible on intact white and keeps text readable on a damaged one
+            outline = max(2, round(size / 10))
             _draw_document(painter, doc, r["x"], r["y"], outline)
     finally:
         painter.end()
