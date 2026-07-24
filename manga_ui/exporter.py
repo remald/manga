@@ -2,15 +2,14 @@ import cv2
 import numpy as np
 from PIL import Image
 from scipy import ndimage
-from PySide6.QtCore import Qt
 from PySide6.QtGui import (
-    QImage, QPainter, QFont, QTextDocument, QTextOption, QColor, QPalette,
+    QImage, QPainter, QFont, QTextDocument, QColor, QPalette,
     QAbstractTextDocumentLayout,
 )
 
 from .box_layout import region_center_in_bubble
 from .region_item import (
-    apply_line_height,
+    apply_line_height, text_render_option,
     DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE,
 )
 
@@ -147,18 +146,21 @@ def export_page(image_path, regions: list[dict], bubbles: list[dict], inpainter)
         painter.setRenderHint(QPainter.TextAntialiasing)
         for r in active:
             family = r.get("font_family", DEFAULT_FONT_FAMILY)
+            text = r["translated_text"]
+            if r.get("uppercase", True):
+                text = text.upper()
             size = r.get("font_size")
             if size is None:
                 # region never materialized in the editor (page not visited):
                 # auto-fit here the same way the editor would
                 size = (
-                    _fit_font_size(r["translated_text"], family, r["w"], r["h"])
+                    _fit_font_size(text, family, r["w"], r["h"])
                     if r.get("auto_fit", True) else DEFAULT_FONT_SIZE
                 )
             doc = QTextDocument()
             doc.setDefaultFont(QFont(family, size))
-            doc.setDefaultTextOption(QTextOption(Qt.AlignHCenter))
-            doc.setPlainText(r["translated_text"])
+            doc.setDefaultTextOption(text_render_option())
+            doc.setPlainText(text)
             apply_line_height(doc)
             doc.setTextWidth(r["w"])
             # white outline everywhere: on art it's essential, in bubbles it's
@@ -197,6 +199,7 @@ def _fit_font_size(text: str, family: str, width: float, height: float) -> int:
     """Mirror of TextRegionItem.fit_font_size for regions that were never
     shown in the editor."""
     doc = QTextDocument()
+    doc.setDefaultTextOption(text_render_option())
     doc.setPlainText(text)
     apply_line_height(doc)
     doc.setTextWidth(width)

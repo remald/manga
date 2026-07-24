@@ -29,8 +29,11 @@ class PageScene(QGraphicsScene):
         enabled=True,
         font_family=DEFAULT_FONT_FAMILY,
         font_size=None,
+        uppercase=True,
     ):
-        item = TextRegionItem(rect, translated_text, source_text, enabled, font_family, font_size)
+        item = TextRegionItem(
+            rect, translated_text, source_text, enabled, font_family, font_size, uppercase
+        )
         self.addItem(item)
         self.regions.append(item)
         if item.auto_fit:

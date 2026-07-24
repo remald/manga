@@ -1,5 +1,7 @@
 from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QPen, QBrush, QColor, QFont, QTextCursor, QTextBlockFormat
+from PySide6.QtGui import (
+    QPen, QBrush, QColor, QFont, QTextCursor, QTextBlockFormat, QTextOption,
+)
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsTextItem, QGraphicsItem
 
 HANDLE_MARGIN = 8.0
@@ -9,6 +11,14 @@ DEFAULT_FONT_SIZE = 14
 MIN_FONT_SIZE = 5   # readability floor for auto-fit only; manual choice is unrestricted
 MAX_FONT_SIZE = 72
 LINE_HEIGHT_PCT = 85  # line spacing as % of font height; tight for comic lettering
+
+
+def text_render_option() -> QTextOption:
+    """Shared alignment/wrap settings for the editor and the exporter, so
+    line breaks match exactly: centered, long words broken to fit the box."""
+    option = QTextOption(Qt.AlignHCenter)
+    option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+    return option
 
 
 def apply_line_height(document, pct: int = LINE_HEIGHT_PCT):
@@ -43,6 +53,7 @@ class TextRegionItem(QGraphicsRectItem):
         enabled: bool = True,
         font_family: str = DEFAULT_FONT_FAMILY,
         font_size: int | None = None,  # None -> auto-fit to the box
+        uppercase: bool = True,
     ):
         super().__init__(rect)
         self.setFlags(
@@ -57,6 +68,8 @@ class TextRegionItem(QGraphicsRectItem):
         self.source_text = source_text
         self.translated_text = translated_text
         self.translation_enabled = enabled
+        # display-only: renders text uppercased, translated_text stays original
+        self.uppercase = uppercase
         self.font_family = font_family
         self.auto_fit = font_size is None
         self.font_size = font_size if font_size is not None else DEFAULT_FONT_SIZE
@@ -83,6 +96,12 @@ class TextRegionItem(QGraphicsRectItem):
         self._refresh_text()
         self._update_style()
         if enabled and self.auto_fit:
+            self.fit_font_size()
+
+    def set_uppercase(self, uppercase: bool):
+        self.uppercase = uppercase
+        self._refresh_text()
+        if self.auto_fit:
             self.fit_font_size()
 
     def set_font_family(self, family: str):
@@ -132,17 +151,20 @@ class TextRegionItem(QGraphicsRectItem):
         if scene is not None and hasattr(scene, "region_autofit"):
             scene.region_autofit.emit(self)
 
+    def _display_text(self) -> str:
+        if not self.translation_enabled:
+            return ""
+        return self.translated_text.upper() if self.uppercase else self.translated_text
+
     def _refresh_text(self):
-        self.text_item.setPlainText(self.translated_text if self.translation_enabled else "")
+        self.text_item.setPlainText(self._display_text())
         apply_line_height(self.text_item.document())
         self._center_vertically()
 
     def _layout_text(self):
         r = self.rect()
         self.text_item.setTextWidth(max(r.width(), 1))
-        option = self.text_item.document().defaultTextOption()
-        option.setAlignment(Qt.AlignHCenter)
-        self.text_item.document().setDefaultTextOption(option)
+        self.text_item.document().setDefaultTextOption(text_render_option())
         self._center_vertically()
 
     def _center_vertically(self):
@@ -226,6 +248,7 @@ class TextRegionItem(QGraphicsRectItem):
             "source_text": self.source_text,
             "translated_text": self.translated_text,
             "enabled": self.translation_enabled,
+            "uppercase": self.uppercase,
             "font_family": self.font_family,
             "font_size": self.font_size,
             "auto_fit": self.auto_fit,

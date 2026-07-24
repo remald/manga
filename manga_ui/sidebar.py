@@ -26,6 +26,9 @@ class RegionEditorPanel(QWidget):
         self.enabled_checkbox = QCheckBox("Перевод включен для этого фрагмента")
         self.enabled_checkbox.toggled.connect(self._on_enabled_toggled)
 
+        self.uppercase_checkbox = QCheckBox("ВЕРХНИЙ РЕГИСТР")
+        self.uppercase_checkbox.toggled.connect(self._on_uppercase_toggled)
+
         self.font_combo = QFontComboBox()
         self.font_combo.currentFontChanged.connect(self._on_font_changed)
 
@@ -45,6 +48,7 @@ class RegionEditorPanel(QWidget):
         layout.addWidget(QLabel("Оригинал:"))
         layout.addWidget(self.source_view)
         layout.addWidget(self.enabled_checkbox)
+        layout.addWidget(self.uppercase_checkbox)
         layout.addLayout(font_row)
         layout.addWidget(QLabel("Перевод:"))
         layout.addWidget(self.translation_edit)
@@ -60,11 +64,13 @@ class RegionEditorPanel(QWidget):
             self.source_view.setPlainText("")
             self.translation_edit.setPlainText("")
             self.enabled_checkbox.setChecked(True)
+            self.uppercase_checkbox.setChecked(True)
         else:
             self.setEnabled(True)
             self.source_view.setPlainText(item.source_text)
             self.translation_edit.setPlainText(item.translated_text)
             self.enabled_checkbox.setChecked(item.translation_enabled)
+            self.uppercase_checkbox.setChecked(item.uppercase)
             self.font_combo.setCurrentFont(QFont(item.font_family))
             self.size_spin.setValue(item.font_size)
         self._updating = False
@@ -79,6 +85,12 @@ class RegionEditorPanel(QWidget):
         if self._updating or self._current_item is None:
             return
         self._current_item.set_enabled_state(checked)
+        self.region_updated.emit()
+
+    def _on_uppercase_toggled(self, checked):
+        if self._updating or self._current_item is None:
+            return
+        self._current_item.set_uppercase(checked)
         self.region_updated.emit()
 
     def _on_font_changed(self, font: QFont):

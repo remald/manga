@@ -476,6 +476,7 @@ class MainWindow(QMainWindow):
             enabled=data["enabled"],
             font_family=data.get("font_family", "Arial"),
             font_size=None if data.get("auto_fit", True) else data.get("font_size", 14),
+            uppercase=data.get("uppercase", True),
         )
         item.region_id = data.get("region_id")
         item.source_box = data.get("source_box")
