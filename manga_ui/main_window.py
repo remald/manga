@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from .appfonts import load_bundled_fonts
 from .box_layout import widen_boxes_in_bubbles
+from .i18n import t, lang_name, set_language, get_language, default_language, UI_LANGUAGES
 from .detection_worker import DetectionWorker
 from .detector import MangaDetector
 from .export_worker import ExportWorker, BatchExportWorker
@@ -27,40 +28,23 @@ PLACEHOLDER_TEXT = "Translation not ready"
 # hieroglyphic targets read fine in narrow vertical boxes — skip widening
 CJK_TARGETS = {"Chinese"}
 
-# display label -> full English name; keys must exist in ocr.EASYOCR_CODES
-# (except Japanese, which goes through Manga OCR)
-SOURCE_LANGUAGES = {
-    "Японский": "Japanese",
-    "Английский": "English",
-    "Китайский": "Chinese",
-    "Корейский": "Korean",
-    "Испанский": "Spanish",
-    "Французский": "French",
-    "Немецкий": "German",
-    "Португальский": "Portuguese",
-    "Итальянский": "Italian",
-    "Русский": "Russian",
-}
-
-# display label -> full English name for the HY-MT prompt
-TARGET_LANGUAGES = {
-    "Русский": "Russian",
-    "Английский": "English",
-    "Китайский": "Chinese",
-    "Корейский": "Korean",
-    "Испанский": "Spanish",
-    "Французский": "French",
-    "Немецкий": "German",
-    "Португальский": "Portuguese",
-    "Итальянский": "Italian",
-    "Турецкий": "Turkish",
-}
+# canonical names (internal + HY-MT prompt); display names are localized in i18n.
+# Sources must exist in ocr.EASYOCR_CODES (except Japanese, which uses Manga OCR).
+SOURCE_LANGS = [
+    "Japanese", "English", "Chinese", "Korean", "Spanish",
+    "French", "German", "Portuguese", "Italian", "Russian",
+]
+TARGET_LANGS = [
+    "Russian", "English", "Chinese", "Korean", "Spanish",
+    "French", "German", "Portuguese", "Italian", "Turkish",
+]
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         load_bundled_fonts()  # register the bundled comic font before any region renders
+        set_language(default_language())
         self.setWindowTitle("Manga Translator")
         self.resize(1400, 900)
 
@@ -85,7 +69,8 @@ class MainWindow(QMainWindow):
         side_widget.setMinimumWidth(280)
         side_widget.setMaximumWidth(380)
         side_layout = QVBoxLayout(side_widget)
-        side_layout.addWidget(QLabel("Фрагменты на странице:"))
+        self.fragments_header = QLabel(t("fragments_header"))
+        side_layout.addWidget(self.fragments_header)
         side_layout.addWidget(self.region_list, 1)
         side_layout.addWidget(self.editor_panel, 2)
 
@@ -127,68 +112,109 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Main")
         self.addToolBar(tb)
 
-        open_action = QAction("Открыть папку...", self)
-        open_action.triggered.connect(self.open_folder)
-        tb.addAction(open_action)
+        self.open_action = QAction(t("open_folder"), self)
+        self.open_action.triggered.connect(self.open_folder)
+        tb.addAction(self.open_action)
         tb.addSeparator()
 
-        prev_action = QAction("< Пред.", self)
-        prev_action.setShortcut(QKeySequence("Left"))
-        prev_action.triggered.connect(self.prev_page)
-        tb.addAction(prev_action)
+        self.prev_action = QAction(t("prev_page"), self)
+        self.prev_action.setShortcut(QKeySequence("Left"))
+        self.prev_action.triggered.connect(self.prev_page)
+        tb.addAction(self.prev_action)
 
         tb.addWidget(self.page_label)
 
-        next_action = QAction("След. >", self)
-        next_action.setShortcut(QKeySequence("Right"))
-        next_action.triggered.connect(self.next_page)
-        tb.addAction(next_action)
+        self.next_action = QAction(t("next_page"), self)
+        self.next_action.setShortcut(QKeySequence("Right"))
+        self.next_action.triggered.connect(self.next_page)
+        tb.addAction(self.next_action)
         tb.addSeparator()
 
-        self.draw_action = QAction("Добавить рамку", self)
+        self.draw_action = QAction(t("add_box"), self)
         self.draw_action.setCheckable(True)
         self.draw_action.toggled.connect(self.view.set_draw_mode)
         tb.addAction(self.draw_action)
 
-        delete_action = QAction("Удалить рамку", self)
-        delete_action.setShortcut(QKeySequence("Delete"))
-        delete_action.triggered.connect(self.delete_selected_region)
-        tb.addAction(delete_action)
+        self.delete_action = QAction(t("delete_box"), self)
+        self.delete_action.setShortcut(QKeySequence("Delete"))
+        self.delete_action.triggered.connect(self.delete_selected_region)
+        tb.addAction(self.delete_action)
         tb.addSeparator()
 
-        self.export_action = QAction("Экспорт страницы...", self)
+        self.export_action = QAction(t("export_page"), self)
         self.export_action.triggered.connect(self.export_current_page)
         tb.addAction(self.export_action)
 
-        self.export_all_action = QAction("Экспортировать все...", self)
+        self.export_all_action = QAction(t("export_all"), self)
         self.export_all_action.triggered.connect(self.export_all_pages)
         tb.addAction(self.export_all_action)
         tb.addSeparator()
 
-        tb.addWidget(QLabel(" Оригинал: "))
+        self.source_label = QLabel(t("source_label"))
+        tb.addWidget(self.source_label)
         self.source_language_combo = QComboBox()
-        self.source_language_combo.addItems(SOURCE_LANGUAGES.keys())
-        self.source_language_combo.currentTextChanged.connect(self._on_source_language_changed)
+        for canon in SOURCE_LANGS:
+            self.source_language_combo.addItem(lang_name(canon), canon)
+        self.source_language_combo.currentIndexChanged.connect(self._on_source_language_changed)
         tb.addWidget(self.source_language_combo)
 
-        tb.addWidget(QLabel(" Перевод: "))
+        self.target_label = QLabel(t("target_label"))
+        tb.addWidget(self.target_label)
         self.language_combo = QComboBox()
-        self.language_combo.addItems(TARGET_LANGUAGES.keys())
-        self.language_combo.currentTextChanged.connect(self._on_language_changed)
+        for canon in TARGET_LANGS:
+            self.language_combo.addItem(lang_name(canon), canon)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         tb.addWidget(self.language_combo)
 
-        retranslate_action = QAction("Перевести заново", self)
-        retranslate_action.triggered.connect(self.retranslate_current_page)
-        tb.addAction(retranslate_action)
+        self.retranslate_action = QAction(t("retranslate"), self)
+        self.retranslate_action.triggered.connect(self.retranslate_current_page)
+        tb.addAction(self.retranslate_action)
+        tb.addSeparator()
+
+        self.ui_label = QLabel(t("ui_label"))
+        tb.addWidget(self.ui_label)
+        self.ui_language_combo = QComboBox()
+        for code, name in UI_LANGUAGES:
+            self.ui_language_combo.addItem(name, code)
+        self.ui_language_combo.setCurrentIndex(
+            next((i for i, (c, _) in enumerate(UI_LANGUAGES) if c == get_language()), 0)
+        )
+        self.ui_language_combo.currentIndexChanged.connect(self._on_ui_language_changed)
+        tb.addWidget(self.ui_language_combo)
+
+    def retranslate_ui(self):
+        """Re-applies every translatable label after a UI-language switch."""
+        self.fragments_header.setText(t("fragments_header"))
+        self.open_action.setText(t("open_folder"))
+        self.prev_action.setText(t("prev_page"))
+        self.next_action.setText(t("next_page"))
+        self.draw_action.setText(t("add_box"))
+        self.delete_action.setText(t("delete_box"))
+        self.export_action.setText(t("export_page"))
+        self.export_all_action.setText(t("export_all"))
+        self.retranslate_action.setText(t("retranslate"))
+        self.source_label.setText(t("source_label"))
+        self.target_label.setText(t("target_label"))
+        self.ui_label.setText(t("ui_label"))
+        for i, canon in enumerate(SOURCE_LANGS):
+            self.source_language_combo.setItemText(i, lang_name(canon))
+        for i, canon in enumerate(TARGET_LANGS):
+            self.language_combo.setItemText(i, lang_name(canon))
+        self.editor_panel.retranslate_ui()
+        self._refresh_region_list()
+
+    def _on_ui_language_changed(self, _index):
+        set_language(self.ui_language_combo.currentData())
+        self.retranslate_ui()
 
     # --- folder / page navigation ----------------------------------------
     def open_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Выберите папку со страницами")
+        folder = QFileDialog.getExistingDirectory(self, t("choose_folder_title"))
         if not folder:
             return
         paths = sorted(p for p in Path(folder).iterdir() if p.suffix.lower() in IMAGE_EXTS)
         if not paths:
-            QMessageBox.warning(self, "Нет изображений", "В папке не найдено изображений.")
+            QMessageBox.warning(self, t("no_images_title"), t("no_images_body"))
             return
         self.detection_worker.clear_pending()
         self._pipeline_gen += 1
@@ -269,8 +295,8 @@ class MainWindow(QMainWindow):
                     "enabled": True,
                 })
         self.statusBar().showMessage(
-            f"Страница {index + 1}: найдено текста — {len(result['texts'])}, "
-            f"пузырьков — {len(result['bubbles'])}", 5000,
+            t("status_detected", page=index + 1,
+              texts=len(result["texts"]), bubbles=len(result["bubbles"])), 5000,
         )
 
     def _on_region_translated(self, index: int, region_id: str, source: str, translation: str):
@@ -301,14 +327,12 @@ class MainWindow(QMainWindow):
             if r.region_id and r.source_text.strip()
         ]
         if not fragments:
-            self.statusBar().showMessage(
-                "Нечего переводить: на странице нет фрагментов с распознанным текстом", 5000
-            )
+            self.statusBar().showMessage(t("status_nothing_to_translate"), 5000)
             return
         self.detection_worker.enqueue_retranslation(self.current_page, fragments)
 
-    def _on_source_language_changed(self, label: str):
-        lang = SOURCE_LANGUAGES[label]
+    def _on_source_language_changed(self, _index):
+        lang = self.source_language_combo.currentData()
         self.ocr.source_language = lang
         self.translator.source_language = lang
         if not self.page_paths:
@@ -325,13 +349,13 @@ class MainWindow(QMainWindow):
         self.current_page = -1  # load_page must not save the stale regions
         self.load_page(current)
         self.statusBar().showMessage(
-            f"Исходный язык: {label}. Страницы распознаются заново.", 5000
+            t("status_source_changed", lang=lang_name(lang)), 5000
         )
 
-    def _on_language_changed(self, label: str):
+    def _on_language_changed(self, _index):
         # a plain str assignment is atomic, safe to do while the worker runs;
         # applies to fragments translated from now on
-        self.translator.target_language = TARGET_LANGUAGES[label]
+        self.translator.target_language = self.language_combo.currentData()
 
     def _on_detection_status(self, message: str):
         if message:
@@ -357,7 +381,7 @@ class MainWindow(QMainWindow):
         src = self.page_paths[self.current_page]
         default = str(src.with_name(f"{src.stem}_translated.png"))
         out_path, _ = QFileDialog.getSaveFileName(
-            self, "Экспорт страницы", default, "Изображения (*.png *.jpg *.webp)"
+            self, t("export_page_title"), default, t("images_filter")
         )
         if not out_path:
             return
@@ -366,7 +390,7 @@ class MainWindow(QMainWindow):
             self._pending_single_export = (self.current_page, out_path)
             self._set_export_running(True)
             self.statusBar().showMessage(
-                f"Ожидание обработки страницы {self.current_page + 1} перед экспортом..."
+                t("status_waiting_page_export", page=self.current_page + 1)
             )
             return
         self._start_single_export(self.current_page, out_path)
@@ -378,7 +402,7 @@ class MainWindow(QMainWindow):
             regions = self.page_regions.get(index, [])
         bubbles = self.page_detections.get(index, {}).get("bubbles", [])
         self._set_export_running(True)
-        self.statusBar().showMessage("Экспорт: вырезание текста и рендеринг...")
+        self.statusBar().showMessage(t("status_export_rendering"))
         self._export_worker = ExportWorker(
             self.page_paths[index], regions, bubbles, self.inpainter, out_path
         )
@@ -389,7 +413,7 @@ class MainWindow(QMainWindow):
     def export_all_pages(self):
         if not self.page_paths:
             return
-        out_dir = QFileDialog.getExistingDirectory(self, "Папка для экспорта")
+        out_dir = QFileDialog.getExistingDirectory(self, t("export_dir_title"))
         if not out_dir:
             return
         pending = [i for i in range(len(self.page_paths)) if i not in self._pages_done]
@@ -403,7 +427,7 @@ class MainWindow(QMainWindow):
             self._set_export_running(True, determinate_total=len(self.page_paths))
             self.export_progress.setValue(len(self._pages_done))
             self.statusBar().showMessage(
-                f"Ожидание обработки страниц: {len(self._pages_done)} / {len(self.page_paths)}..."
+                t("status_waiting_pages", done=len(self._pages_done), total=len(self.page_paths))
             )
         else:
             self._start_batch_export(out_dir)
@@ -422,7 +446,7 @@ class MainWindow(QMainWindow):
         done = len([i for i in self._pages_done if i < len(self.page_paths)])
         self.export_progress.setValue(done)
         self.statusBar().showMessage(
-            f"Ожидание обработки страниц: {done} / {len(self.page_paths)}..."
+            t("status_waiting_pages", done=done, total=len(self.page_paths))
         )
         if done >= len(self.page_paths):
             out_dir = self._pending_export_dir
@@ -440,7 +464,7 @@ class MainWindow(QMainWindow):
             bubbles = self.page_detections.get(i, {}).get("bubbles", [])
             jobs.append((path, regions, bubbles))
         self._set_export_running(True, determinate_total=len(jobs))
-        self.statusBar().showMessage("Экспорт всех страниц...")
+        self.statusBar().showMessage(t("status_export_all"))
         self._export_worker = BatchExportWorker(jobs, self.inpainter, out_dir)
         self._export_worker.progress.connect(self._on_export_progress)
         self._export_worker.finished_ok.connect(self._on_export_done)
@@ -450,16 +474,16 @@ class MainWindow(QMainWindow):
     def _on_export_progress(self, done: int, total: int):
         self.export_progress.setRange(0, total)
         self.export_progress.setValue(done)
-        self.statusBar().showMessage(f"Экспорт: страница {done} / {total}")
+        self.statusBar().showMessage(t("status_export_progress", done=done, total=total))
 
     def _on_export_done(self, path: str):
         self._set_export_running(False)
-        self.statusBar().showMessage(f"Экспортировано: {path}", 8000)
+        self.statusBar().showMessage(t("status_exported", path=path), 8000)
 
     def _on_export_failed(self, error: str):
         self._set_export_running(False)
         self.statusBar().showMessage("")
-        QMessageBox.warning(self, "Ошибка экспорта", error)
+        QMessageBox.warning(self, t("export_error_title"), error)
 
     # --- region <-> per-page storage --------------------------------------
     def _save_current_page_regions(self):
@@ -505,7 +529,7 @@ class MainWindow(QMainWindow):
         self.region_list.blockSignals(True)
         self.region_list.clear()
         for i, region in enumerate(self.scene.regions):
-            label = region.translated_text.strip() or "(пусто)"
+            label = region.translated_text.strip() or t("empty_region")
             self.region_list.addItem(QListWidgetItem(f"{i + 1}. {label[:30]}"))
         self.region_list.blockSignals(False)
 

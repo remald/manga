@@ -24,32 +24,32 @@ def run_batch(input_dir, output_dir, source_lang, target_lang):
     app = QGuiApplication([])
     errors = translate_folder(input_dir, output_dir, source_lang, target_lang)
     if errors:
-        print("Не экспортированы страницы:")
+        print("Pages not exported:")
         for line in errors:
             print(f"  {line}")
         sys.exit(1)
 
 
 def main():
-    from manga_ui.main_window import SOURCE_LANGUAGES, TARGET_LANGUAGES
+    from manga_ui.main_window import SOURCE_LANGS, TARGET_LANGS
 
     parser = argparse.ArgumentParser(
-        description="Manga Translator: без аргументов открывает GUI, "
-        "с --batch переводит папку страниц без интерфейса."
+        description="Manga Translator: launches the GUI with no arguments, "
+        "translates a folder of pages headlessly with --batch."
     )
     parser.add_argument(
         "--batch", nargs=2, metavar=("INPUT_DIR", "OUTPUT_DIR"),
-        help="перевести все страницы из INPUT_DIR и сохранить в OUTPUT_DIR",
+        help="translate every page in INPUT_DIR and save into OUTPUT_DIR",
     )
     parser.add_argument(
         "--source-lang", default="Japanese",
-        choices=sorted(set(SOURCE_LANGUAGES.values())),
-        help="язык оригинала (по умолчанию Japanese)",
+        choices=sorted(SOURCE_LANGS),
+        help="source language (default: Japanese)",
     )
     parser.add_argument(
         "--target-lang", default="Russian",
-        choices=sorted(set(TARGET_LANGUAGES.values())),
-        help="язык перевода (по умолчанию Russian)",
+        choices=sorted(TARGET_LANGS),
+        help="target language (default: Russian)",
     )
     args = parser.parse_args()
     if args.batch:

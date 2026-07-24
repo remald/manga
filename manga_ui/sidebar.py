@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
     QFontComboBox, QSpinBox,
 )
 
+from .i18n import t
+
 
 class RegionEditorPanel(QWidget):
     """Shows/edits the currently selected text region: original text (read-only),
@@ -23,10 +25,10 @@ class RegionEditorPanel(QWidget):
         self.source_view.setReadOnly(True)
         self.source_view.setMaximumHeight(100)
 
-        self.enabled_checkbox = QCheckBox("Перевод включен для этого фрагмента")
+        self.enabled_checkbox = QCheckBox(t("enabled_checkbox"))
         self.enabled_checkbox.toggled.connect(self._on_enabled_toggled)
 
-        self.uppercase_checkbox = QCheckBox("ВЕРХНИЙ РЕГИСТР")
+        self.uppercase_checkbox = QCheckBox(t("uppercase_checkbox"))
         self.uppercase_checkbox.toggled.connect(self._on_uppercase_toggled)
 
         self.font_combo = QFontComboBox()
@@ -36,25 +38,37 @@ class RegionEditorPanel(QWidget):
         self.size_spin.setRange(1, 200)
         self.size_spin.valueChanged.connect(self._on_size_changed)
 
+        self.font_label = QLabel(t("font_label"))
+        self.size_label = QLabel(t("size_label"))
         font_row = QHBoxLayout()
-        font_row.addWidget(QLabel("Шрифт:"))
+        font_row.addWidget(self.font_label)
         font_row.addWidget(self.font_combo, 1)
-        font_row.addWidget(QLabel("Размер:"))
+        font_row.addWidget(self.size_label)
         font_row.addWidget(self.size_spin)
 
         self.translation_edit = QPlainTextEdit()
         self.translation_edit.textChanged.connect(self._on_text_changed)
 
-        layout.addWidget(QLabel("Оригинал:"))
+        self.original_label = QLabel(t("original_label"))
+        self.translation_label = QLabel(t("translation_label"))
+        layout.addWidget(self.original_label)
         layout.addWidget(self.source_view)
         layout.addWidget(self.enabled_checkbox)
         layout.addWidget(self.uppercase_checkbox)
         layout.addLayout(font_row)
-        layout.addWidget(QLabel("Перевод:"))
+        layout.addWidget(self.translation_label)
         layout.addWidget(self.translation_edit)
         layout.addStretch()
 
         self.setEnabled(False)
+
+    def retranslate_ui(self):
+        self.enabled_checkbox.setText(t("enabled_checkbox"))
+        self.uppercase_checkbox.setText(t("uppercase_checkbox"))
+        self.font_label.setText(t("font_label"))
+        self.size_label.setText(t("size_label"))
+        self.original_label.setText(t("original_label"))
+        self.translation_label.setText(t("translation_label"))
 
     def set_region(self, item):
         self._updating = True

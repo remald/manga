@@ -27,7 +27,7 @@ def translate_folder(
     output_dir = Path(output_dir)
     paths = sorted(p for p in input_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
     if not paths:
-        raise ValueError(f"в папке нет изображений: {input_dir}")
+        raise ValueError(f"no images in folder: {input_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     load_bundled_fonts()  # the renderer uses the bundled comic font by default
 
@@ -69,9 +69,9 @@ def translate_folder(
             qimage = export_page(str(path), regions, result["bubbles"], inpainter)
             out = output_dir / f"{path.stem}_translated.png"
             if not qimage.save(str(out)):
-                raise RuntimeError(f"не удалось сохранить {out}")
+                raise RuntimeError(f"failed to save {out}")
             log(f"  -> {out}")
         except Exception as e:
             errors.append(f"{path.name}: {e}")
-            log(f"  ошибка: {e}")
+            log(f"  error: {e}")
     return errors

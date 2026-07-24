@@ -5,6 +5,7 @@ from PIL import Image
 from PySide6.QtCore import QThread, Signal
 
 from .box_layout import region_center_in_bubble
+from .i18n import t
 
 
 def sort_reading_order(texts: list, page_height: int, rtl: bool = True) -> list:
@@ -80,7 +81,7 @@ class DetectionWorker(QThread):
                 self._run_retranslation(task[1], task[2])
 
     def _run_retranslation(self, index: int, fragments):
-        self.status_changed.emit(f"Повторный перевод страницы {index + 1}...")
+        self.status_changed.emit(t("worker_retranslating", page=index + 1))
         sources = [source for _, source in fragments]
         translations = self._translate_fragments(index, sources)
         for (region_id, source), translation in zip(fragments, translations):
@@ -89,7 +90,7 @@ class DetectionWorker(QThread):
         self.status_changed.emit("")
 
     def _run_region(self, index: int, path: str, region_id: str, box: dict):
-        self.status_changed.emit(f"OCR нового фрагмента (стр. {index + 1})...")
+        self.status_changed.emit(t("worker_ocr_new", page=index + 1))
         source = ""
         try:
             image = Image.open(path).convert("RGB")
@@ -100,14 +101,14 @@ class DetectionWorker(QThread):
             if right > left and bottom > top:
                 source = self._ocr.read(image.crop((left, top, right, bottom)))
         except Exception as e:
-            self.status_changed.emit(f"Ошибка OCR нового фрагмента (стр. {index + 1}): {e}")
+            self.status_changed.emit(t("worker_ocr_new_error", page=index + 1, error=e))
             return
         if not source:
             # clear the placeholder so the box doesn't claim a pending translation
             self.region_translated.emit(index, region_id, "", "")
-            self.status_changed.emit(f"Новый фрагмент (стр. {index + 1}): текст не распознан")
+            self.status_changed.emit(t("worker_new_not_recognized", page=index + 1))
             return
-        self.status_changed.emit(f"Перевод нового фрагмента (стр. {index + 1})...")
+        self.status_changed.emit(t("worker_translate_new", page=index + 1))
         translation = self._translate_fragments(index, [source])[0]
         self.region_translated.emit(index, region_id, source, translation)
         self.status_changed.emit("")
@@ -120,10 +121,10 @@ class DetectionWorker(QThread):
 
     def _run_detection_inner(self, index: int, path: str, generation: int):
         try:
-            self.status_changed.emit(f"Детекция: страница {index + 1}...")
+            self.status_changed.emit(t("worker_detecting", page=index + 1))
             result = self._detector.detect(path)
         except Exception as e:
-            self.status_changed.emit(f"Ошибка детекции на странице {index + 1}: {e}")
+            self.status_changed.emit(t("worker_detect_error", page=index + 1, error=e))
             return
 
         image = Image.open(path).convert("RGB")
@@ -149,7 +150,7 @@ class DetectionWorker(QThread):
         for i, det in enumerate(texts):
             try:
                 self.status_changed.emit(
-                    f"OCR: страница {index + 1}, фрагмент {i + 1}/{len(texts)}..."
+                    t("worker_ocr", page=index + 1, i=i + 1, n=len(texts))
                 )
                 crop = image.crop((
                     int(det["x"]), int(det["y"]),
@@ -157,9 +158,9 @@ class DetectionWorker(QThread):
                 ))
                 sources[i] = self._ocr.read(crop)
             except Exception as e:
-                self.status_changed.emit(f"Ошибка OCR (стр. {index + 1}, фрагмент {i + 1}): {e}")
+                self.status_changed.emit(t("worker_ocr_error", page=index + 1, i=i + 1, error=e))
 
-        self.status_changed.emit(f"Перевод страницы {index + 1}...")
+        self.status_changed.emit(t("worker_translating_page", page=index + 1))
         translations = self._translate_fragments(index, sources)
         for det, source, translation in zip(texts, sources, translations):
             if source:
@@ -176,16 +177,14 @@ class DetectionWorker(QThread):
                 result = self._translator.translate_batch(sources)
                 if result is not None:
                     return result
-                self.status_changed.emit(
-                    f"Страница {index + 1}: батч-перевод не разобран, перевожу по фрагментам..."
-                )
+                self.status_changed.emit(t("worker_batch_unparsed", page=index + 1))
             except Exception as e:
-                self.status_changed.emit(f"Ошибка батч-перевода (стр. {index + 1}): {e}")
+                self.status_changed.emit(t("worker_batch_error", page=index + 1, error=e))
         translations = []
         for source in sources:
             try:
                 translations.append(self._translator.translate(source) if source else "")
             except Exception as e:
-                self.status_changed.emit(f"Ошибка перевода (стр. {index + 1}): {e}")
+                self.status_changed.emit(t("worker_translate_error", page=index + 1, error=e))
                 translations.append("")
         return translations

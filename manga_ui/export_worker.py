@@ -3,6 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from .exporter import export_page
+from .i18n import t
 
 
 class ExportWorker(QThread):
@@ -23,7 +24,7 @@ class ExportWorker(QThread):
         try:
             qimage = export_page(self._image_path, self._regions, self._bubbles, self._inpainter)
             if not qimage.save(self._out_path):
-                raise RuntimeError(f"не удалось сохранить {self._out_path}")
+                raise RuntimeError(t("export_save_failed", path=self._out_path))
         except Exception as e:
             self.failed.emit(str(e))
             return
@@ -52,11 +53,11 @@ class BatchExportWorker(QThread):
                 qimage = export_page(str(src), regions, bubbles, self._inpainter)
                 out = self._out_dir / f"{src.stem}_translated.png"
                 if not qimage.save(str(out)):
-                    raise RuntimeError(f"не удалось сохранить {out}")
+                    raise RuntimeError(t("export_save_failed", path=out))
             except Exception as e:
                 errors.append(f"{src.name}: {e}")
             self.progress.emit(i + 1, len(self._jobs))
         if errors:
-            self.failed.emit("Не экспортированы страницы:\n" + "\n".join(errors))
+            self.failed.emit(t("export_pages_failed") + "\n" + "\n".join(errors))
         else:
             self.finished_ok.emit(str(self._out_dir))
