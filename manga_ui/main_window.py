@@ -360,6 +360,8 @@ class MainWindow(QMainWindow):
     def _on_detection_status(self, message: str):
         if message:
             self.statusBar().showMessage(message)
+        else:
+            self.statusBar().clearMessage()
 
     # --- export ------------------------------------------------------------
     def _set_export_running(self, running: bool, determinate_total: int | None = None):
